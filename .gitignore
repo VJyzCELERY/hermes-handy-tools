@@ -1,0 +1,46 @@
+# General OS Files
+.DS_Store
+Thumbs.db
+
+# Data files
+*.db
+
+# Python-related files
+__pycache__/
+*.ruff_cache/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+*.env
+.env
+
+# Config files with secrets (use config.example.yaml as template)
+*.yaml
+!config.example.yaml
+
+# Logs
+logs/
+*.log
+
+# Test outputs
+.pytest_cache/
+coverage.xml
+*.coverage
+htmlcov/
+
+
+# Local development artifacts
+dev/
+*.local
+
+# Development Artifacts
+*/research/*
+*dev/*
+*.github/*
+/.worktrees/
+*/reviews/*
+reviews/
+tmp/
+*.lock

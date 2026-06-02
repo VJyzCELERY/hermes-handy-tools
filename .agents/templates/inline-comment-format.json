@@ -1,0 +1,8 @@
+[
+  {
+    "path": "<file-path>",
+    "line": <line-number>,
+    "side": "RIGHT",
+    "body": "<formatted using .agents/templates/inline-comment-body-snippet.md — fill placeholders and inline as escaped JSON string>"
+  }
+]

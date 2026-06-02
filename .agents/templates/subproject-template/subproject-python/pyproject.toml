@@ -1,0 +1,27 @@
+[project]
+name = "<subproject>"
+version = "0.1.0"
+description = "<description>"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 88
+select = ["E", "W", "F", "D", "C901"]
+ignore = []
+fixable = ["ALL"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[lint.per-file-ignores]
+"**/tests/**" = ["D"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers --disable-warnings --maxfail=2 --cov=<source_dir> --cov-report=html"
+
+[tool.coverage.run]
+source = ["<source_dir>"]
