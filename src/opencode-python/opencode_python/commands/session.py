@@ -20,18 +20,199 @@ def session():
     pass
 
 
-@session.command()
+@session.command("list")
+@click.option("--limit", "-n", default=20, help="Number of sessions to show")
+@click.option("--offset", default=0, help="Offset for pagination")
+@click.option("--json", "json_out", is_flag=True, help="Output JSON")
+def list_sessions(limit: int, offset: int, json_out: bool):
+    """List all sessions with pagination."""
+    api = OpenCodeAPI()
+    
+    try:
+        sessions = api.get_sessions()
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise SystemExit(1)
+    
+    # Sort by updated time (newest first)
+    sessions.sort(key=lambda s: s.get("time", {}).get("updated", 0), reverse=True)
+    
+    # Apply pagination
+    total = len(sessions)
+    sessions = sessions[offset:offset + limit]
+    
+    if json_out:
+        print(json.dumps({
+            "sessions": sessions,
+            "total": total,
+            "offset": offset,
+            "limit": limit
+        }, indent=2))
+        return
+    
+    if not sessions:
+        console.print("[yellow]no sessions found[/yellow]")
+        return
+    
+    table = Table(title=f"Sessions (showing {offset + 1}-{min(offset + limit, total)} of {total})")
+    table.add_column("ID", style="cyan")
+    table.add_column("Title", style="green")
+    table.add_column("Agent", style="yellow")
+    table.add_column("Model", style="magenta")
+    table.add_column("Updated", style="blue")
+    
+    for s in sessions:
+        sid = s.get("id", "?")
+        title = s.get("title", "untitled")[:40]
+        agent = s.get("agent", "?")
+        model = s.get("model", {})
+        model_id = model.get("id", "?") if isinstance(model, dict) else "?"
+        updated = s.get("time", {}).get("updated", 0)
+        
+        if updated:
+            from datetime import datetime
+            updated_str = datetime.fromtimestamp(updated / 1000).strftime("%Y-%m-%d %H:%M")
+        else:
+            updated_str = "?"
+        
+        table.add_row(sid, title, agent, model_id, updated_str)
+    
+    console.print(table)
+    
+    if total > offset + limit:
+        console.print(f"\n[dim]More sessions available. Use --offset {offset + limit} to see next page.[/dim]")
+
+
+@session.command("search")
+@click.argument("query")
+@click.option("--limit", "-n", default=10, help="Max results")
+@click.option("--json", "json_out", is_flag=True, help="Output JSON")
+def search_sessions(query: str, limit: int, json_out: bool):
+    """Search sessions by title, agent, or model."""
+    api = OpenCodeAPI()
+    
+    try:
+        sessions = api.get_sessions()
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise SystemExit(1)
+    
+    query_lower = query.lower()
+    results = []
+    
+    for s in sessions:
+        title = s.get("title", "").lower()
+        agent = s.get("agent", "").lower()
+        model = s.get("model", {})
+        model_id = model.get("id", "").lower() if isinstance(model, dict) else ""
+        sid = s.get("id", "").lower()
+        
+        if (query_lower in title or 
+            query_lower in agent or 
+            query_lower in model_id or
+            query_lower in sid):
+            results.append(s)
+    
+    # Sort by updated time (newest first)
+    results.sort(key=lambda s: s.get("time", {}).get("updated", 0), reverse=True)
+    results = results[:limit]
+    
+    if json_out:
+        print(json.dumps(results, indent=2))
+        return
+    
+    if not results:
+        console.print(f"[yellow]no sessions matching '{query}'[/yellow]")
+        return
+    
+    console.print(f"Found {len(results)} session(s) matching '{query}':\n")
+    
+    for s in results:
+        sid = s.get("id", "?")
+        title = s.get("title", "untitled")
+        agent = s.get("agent", "?")
+        model = s.get("model", {})
+        model_id = model.get("id", "?") if isinstance(model, dict) else "?"
+        updated = s.get("time", {}).get("updated", 0)
+        
+        if updated:
+            from datetime import datetime
+            updated_str = datetime.fromtimestamp(updated / 1000).strftime("%Y-%m-%d %H:%M")
+        else:
+            updated_str = "?"
+        
+        console.print(f"[cyan]{sid}[/cyan]")
+        console.print(f"  Title: {title}")
+        console.print(f"  Agent: {agent} | Model: {model_id}")
+        console.print(f"  Updated: {updated_str}")
+        console.print()
+
+
+@session.command("get")
 @click.argument("session_id")
+@click.option("--json", "json_out", is_flag=True, help="Output JSON")
+@click.option("--messages", "-m", is_flag=True, help="Include messages")
+def get_session(session_id: str, json_out: bool, messages: bool):
+    """Get session details."""
+    api = OpenCodeAPI()
+    
+    try:
+        session = api.get_session(session_id)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise SystemExit(1)
+    
+    if json_out:
+        output = session
+        if messages:
+            output["messages"] = api.get_session_messages(session_id)
+        print(json.dumps(output, indent=2))
+        return
+    
+    console.print(f"Session: [cyan]{session.get('id', '?')}[/cyan]")
+    console.print(f"Title:   {session.get('title', 'untitled')}")
+    console.print(f"Agent:   {session.get('agent', '?')}")
+    
+    model = session.get("model", {})
+    if isinstance(model, dict):
+        console.print(f"Model:   {model.get('id', '?')} ({model.get('providerID', '?')})")
+        if model.get("variant"):
+            console.print(f"Variant: {model.get('variant')}")
+    
+    time_info = session.get("time", {})
+    if time_info.get("created"):
+        from datetime import datetime
+        created = datetime.fromtimestamp(time_info["created"] / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        console.print(f"Created: {created}")
+    if time_info.get("updated"):
+        from datetime import datetime
+        updated = datetime.fromtimestamp(time_info["updated"] / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        console.print(f"Updated: {updated}")
+    
+    cost = session.get("cost", 0)
+    if cost:
+        console.print(f"Cost:    ${cost:.4f}")
+    
+    tokens = session.get("tokens", {})
+    if tokens:
+        console.print(f"Tokens:  {tokens.get('input', 0)} in / {tokens.get('output', 0)} out")
+
+
+@session.command("status")
+@click.argument("session_id", required=False)
 @click.option("--monitor", is_flag=True, help="Monitor until blocked/idle")
 @click.option("--interval", default=10, help="Monitor interval in seconds")
 def status(session_id: str, monitor: bool, interval: int):
     """Check session status."""
     api = OpenCodeAPI()
     
-    if monitor:
+    if monitor and session_id:
         _monitor_session(api, session_id, interval)
-    else:
+    elif session_id:
         _check_session(api, session_id)
+    else:
+        console.print("[red]Error: session_id required[/red]")
+        raise SystemExit(1)
 
 
 def _check_session(api: OpenCodeAPI, session_id: str):

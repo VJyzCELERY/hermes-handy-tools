@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 import requests
 
-from .config import get_server_url
+from .config import get_server_url, get_config_value
 
 
 class OpenCodeAPI:
@@ -15,11 +15,29 @@ class OpenCodeAPI:
     
     def __init__(self, base_url: Optional[str] = None):
         self.base_url = base_url or get_server_url()
+        self._setup_auth()
+    
+    def _setup_auth(self):
+        """Setup authentication from config."""
+        self.auth = None
+        
+        # Check config for password
+        password = get_config_value("opencode_server_password")
+        if password:
+            username = get_config_value("opencode_server_username") or "opencode"
+            self.auth = (username, password)
+        
+        # Environment variable takes precedence
+        import os
+        env_password = os.environ.get("OPENCODE_SERVER_PASSWORD")
+        if env_password:
+            username = os.environ.get("OPENCODE_SERVER_USERNAME") or "opencode"
+            self.auth = (username, env_password)
     
     def _get(self, path: str) -> Any:
         """Make a GET request."""
         try:
-            resp = requests.get(f"{self.base_url}{path}", timeout=10)
+            resp = requests.get(f"{self.base_url}{path}", auth=self.auth, timeout=10)
             resp.raise_for_status()
             return resp.json()
         except requests.exceptions.RequestException as e:
@@ -28,7 +46,7 @@ class OpenCodeAPI:
     def _post(self, path: str, data: Optional[dict] = None) -> Any:
         """Make a POST request."""
         try:
-            resp = requests.post(f"{self.base_url}{path}", json=data, timeout=10)
+            resp = requests.post(f"{self.base_url}{path}", json=data, auth=self.auth, timeout=10)
             resp.raise_for_status()
             return resp.json()
         except requests.exceptions.RequestException as e:
