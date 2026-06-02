@@ -1,5 +1,3 @@
-# opencode-python-cli
-
 ---
 name: opencode-python-cli
 description: "Python CLI for OpenCode server management — CLI-first, API-based HITL, session tracking."
@@ -9,6 +7,7 @@ platforms: [linux, macos, wsl]
 metadata:
   hermes:
     tags: [opencode, cli, hitl, session-tracking, python]
+    related_skills: [opencode-developer]
 ---
 
 # OpenCode Python CLI
@@ -18,7 +17,8 @@ Python CLI for OpenCode server management. Replaces individual shell scripts wit
 ## Installation
 
 ```bash
-cd /path/to/opencode-python-cli
+git clone https://github.com/VJyzCELERY/hermes-handy-tools.git
+cd hermes-handy-tools/src/opencode-python
 pip install -e .
 ```
 
@@ -58,14 +58,22 @@ opencode-python question reply <request_id> "Answer"   # Reply to questions
 opencode-python question reject <request_id>           # Reject question
 ```
 
-### Send Messages
+### Run Messages
 
 ```bash
-opencode-python send "task"                              # New session
-opencode-python send -s <session_id> "Continue"          # Continue session
-opencode-python send -s <session_id> --steer "New dir"   # Interrupt + steer
-opencode-python send --dir /path "task"                  # With working directory
-opencode-python send -m opencode-go/mimo-v2.5 -v high "task"  # Model + variant
+opencode-python run "task"                              # New session
+opencode-python run -s <session_id> "Continue"          # Continue session
+opencode-python run -s <session_id> --steer "New dir"   # Interrupt + steer
+opencode-python run --dir /path "task"                  # With working directory
+opencode-python run -m opencode-go/mimo-v2.5 -v high "task"  # Model + variant
+```
+
+### Skills
+
+```bash
+opencode-python skills list              # List available skills
+opencode-python skills get [name]        # Get skill content
+opencode-python skills export [file]     # Export skills to file
 ```
 
 ### Configuration

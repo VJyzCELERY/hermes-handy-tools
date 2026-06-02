@@ -1,4 +1,4 @@
-"""Send command for OpenCode."""
+"""Run command for OpenCode."""
 
 import json
 import subprocess
@@ -31,7 +31,7 @@ DB_PATH = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
 @click.option("-m", "--model", help="Model to use")
 @click.option("-v", "--variant", help="Reasoning effort variant")
 @click.option("--steer", is_flag=True, help="Interrupt session first, then send (requires -s)")
-def send(
+def run(
     prompt: str,
     continue_last: bool,
     session_id: Optional[str],
@@ -43,7 +43,7 @@ def send(
     variant: Optional[str],
     steer: bool,
 ):
-    """Send a prompt to OpenCode server."""
+    """Run a prompt on OpenCode server."""
     import os
     
     if working_dir is None:

@@ -16,7 +16,7 @@ metadata:
 
 | Mode | When | Tools |
 |------|------|-------|
-| **CLI** | Sending tasks, monitoring, continuing sessions | `opencode-python send`, `opencode-python session` |
+| **CLI** | Sending tasks, monitoring, continuing sessions | `opencode-python run`, `opencode-python session` |
 | **API** | HITL blockers — permissions, questions, status | `opencode-python permission`, `opencode-python question` |
 
 ---
@@ -35,13 +35,13 @@ metadata:
     ▼                     ▼
 ┌─────────┐        ┌──────────┐
 │ CLI     │        │ API      │
-│ send +  │        │ HITL     │
+│ run +   │        │ HITL     │
 │ monitor │        │ resolve  │
 └────┬────┘        └────┬─────┘
      │                  │
      ▼                  ▼
 opencode-python    opencode-python
-  send/session       permission/question
+  run/session       permission/question
 ```
 
 **Server URL:** `http://localhost:4096` (env: `OPENCODE_SERVER_URL`)
@@ -68,14 +68,14 @@ opencode-python server serve
 opencode-python server status || opencode-python server serve
 ```
 
-### Step 2: Send a task
+### Step 2: Run a task
 
 ```bash
-opencode-python send "Implement the auth module"
-opencode-python send -c "Fix the edge case"
-opencode-python send -s ses_abc123 "Add more tests"
-opencode-python send --dir /path/to/project "Do thing"
-opencode-python send -m opencode-go/mimo-v2.5 -v high "task"
+opencode-python run "Implement the auth module"
+opencode-python run -c "Fix the edge case"
+opencode-python run -s ses_abc123 "Add more tests"
+opencode-python run --dir /path/to/project "Do thing"
+opencode-python run -m opencode-go/mimo-v2.5 -v high "task"
 ```
 
 ### Step 3: Monitor
@@ -88,7 +88,7 @@ opencode-python session status <session_id> --monitor
 ### Step 4: Steer (interrupt + redirect)
 
 ```bash
-opencode-python send -s <session_id> --steer "New direction"
+opencode-python run -s <session_id> --steer "New direction"
 ```
 
 ### Step 5: Interrupt (if needed)
@@ -142,9 +142,9 @@ opencode-python question get <session_id>
 opencode-python question reply <request_id> "Answer"
 opencode-python question reject <request_id>
 
-# Send
-opencode-python send "task"
-opencode-python send -s <sid> --steer "new direction"
+# Run
+opencode-python run "task"
+opencode-python run -s <sid> --steer "new direction"
 
 # Config
 opencode-python config get
