@@ -24,7 +24,7 @@ DB_PATH = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
 @click.option("-d", "--dir", "working_dir", default=None, help="Working directory")
 @click.option("-w", "--wait", is_flag=True, help="Wait for completion")
 @click.option("--json", "json_out", is_flag=True, help="Output JSON")
-@click.option("-m", "--model", help="Model to use (default: from config)")
+@click.option("-m", "--model", help="Model to use: provider,model_name or just model_name (default: from config)")
 @click.option("-v", "--variant", help="Reasoning effort variant (default: from config)")
 @click.option("--steer", is_flag=True, help="Interrupt session first, then send (requires -s)")
 def run(
@@ -40,6 +40,14 @@ def run(
     steer: bool,
 ):
     """Run a prompt on OpenCode server."""
+    # Parse model: comma-delimited "provider,model_name" or just "model_name"
+    provider_id = None
+    model_id = model
+    if model and "," in model:
+        parts = model.split(",", 1)
+        provider_id = parts[0].strip()
+        model_id = parts[1].strip()
+
     api = OpenCodeAPI()
     
     # Get config defaults
@@ -103,7 +111,8 @@ def run(
         # Create session if needed
         if not session_id:
             session = api.create_session(
-                model=model,
+                model=model_id,
+                provider=provider_id,
                 variant=variant,
                 directory=working_dir
             )
@@ -113,7 +122,8 @@ def run(
         api.send_message_async(
             session_id=session_id,
             prompt=prompt,
-            model=model,
+            model=model_id,
+            provider=provider_id,
             variant=variant
         )
         

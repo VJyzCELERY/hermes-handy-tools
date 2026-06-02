@@ -472,7 +472,7 @@ opencode-tool run "Implement the auth module"
 opencode-tool run --dir /path/to/project "Fix the bug"
 
 # With model and variant
-opencode-tool run -m opencode-go/mimo-v2.5 -v high "Complex task"
+opencode-tool run -m opencode-go,mimo-v2.5 -v high "Complex task"
 
 # Continue last session
 opencode-tool run -c "Add more tests"
@@ -487,19 +487,19 @@ opencode-tool run -s ses_abc123 "After that, also add error handling"
 opencode-tool run -s ses_abc123 --steer "Focus on unit tests instead"
 
 # Change model mid-session
-opencode-tool run -s ses_abc123 -m openai/gpt-5.5 "Switch to GPT 5.5"
+opencode-tool run -s ses_abc123 -m openai,gpt-5.5 "Switch to GPT 5.5"
 
 # Change variant mid-session (retains current model)
 opencode-tool run -s ses_abc123 -v high "Use high reasoning effort"
 
 # Change both model and variant
-opencode-tool run -s ses_abc123 -m openai/gpt-5.5 -v high "Switch to GPT 5.5 with high reasoning"
+opencode-tool run -s ses_abc123 -m openai,gpt-5.5 -v high "Switch to GPT 5.5 with high reasoning"
 
 # Steer + switch model
-opencode-tool run -s ses_abc123 -m openai/gpt-5.5 --steer "Focus on unit tests"
+opencode-tool run -s ses_abc123 -m openai,gpt-5.5 --steer "Focus on unit tests"
 
 # Steer + switch both model and variant
-opencode-tool run -s ses_abc123 -m openai/gpt-5.5 -v high --steer "Focus on unit tests"
+opencode-tool run -s ses_abc123 -m openai,gpt-5.5 -v high --steer "Focus on unit tests"
 ```
 
 **Use Cases:**

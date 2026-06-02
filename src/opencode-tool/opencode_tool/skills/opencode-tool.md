@@ -65,14 +65,14 @@ opencode-tool session interrupt <sid>    # Abort session
 ```bash
 opencode-tool run "task"                 # New session
 opencode-tool run --dir /path "task"     # With working directory
-opencode-tool run -m <model> -v <variant> "task"  # Model + variant
+opencode-tool run -m <provider>,<model> -v <variant> "task"  # Model + variant
 opencode-tool run -s <sid> "continue"    # Continue session
-opencode-tool run -s <sid> -m <model> "continue"  # Switch model
+opencode-tool run -s <sid> -m <provider>,<model> "continue"  # Switch model
 opencode-tool run -s <sid> -v <variant> "continue"  # Switch variant only
-opencode-tool run -s <sid> -m <model> -v <variant> "continue"  # Switch both
+opencode-tool run -s <sid> -m <provider>,<model> -v <variant> "continue"  # Switch both
 opencode-tool run -s <sid> --steer "dir" # Interrupt + steer
-opencode-tool run -s <sid> -m <model> --steer "dir"  # Steer + switch model
-opencode-tool run -s <sid> -m <model> -v <variant> --steer "dir"  # Steer + switch both
+opencode-tool run -s <sid> -m <provider>,<model> --steer "dir"  # Steer + switch model
+opencode-tool run -s <sid> -m <provider>,<model> -v <variant> --steer "dir"  # Steer + switch both
 opencode-tool run -s <sid> "queue msg"   # Queue (no interrupt)
 ```
 

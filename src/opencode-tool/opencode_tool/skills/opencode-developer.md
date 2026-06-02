@@ -1,7 +1,7 @@
 ---
 name: opencode-developer
 description: "Primary skill for all OpenCode interactions — CLI-first, API-based HITL, session tracking."
-version: 5.0.0
+version: 5.1.0
 author: hermes
 platforms: [linux, macos, wsl]
 metadata:
@@ -122,7 +122,7 @@ opencode-tool    opencode-tool
 
 1. **Use `opencode-tool run`** — Never `opencode run`
 2. **Include `--dir "$(pwd)"`** — Always specify working directory for worktree tasks
-3. **Use `-m` and `-v` for model** — `opencode-tool run -m <model> -v <variant> "task"`
+3. **Use `-m` and `-v` for model** — `opencode-tool run -m <provider>,<model> -v <variant> "task"`
 4. **Use `-s` to continue** — `opencode-tool run -s <session_id> "continue"`
 
 ### When Monitoring
@@ -165,7 +165,7 @@ opencode-tool run "Implement the auth module"
 opencode-tool run --dir /path/to/project "Do thing"
 
 # With model and variant
-opencode-tool run -m opencode-go/mimo-v2.5 -v high "task"
+opencode-tool run -m opencode-go,mimo-v2.5 -v high "task"
 
 # Continue existing session
 opencode-tool run -s ses_abc123 "Add more tests"
@@ -295,9 +295,9 @@ opencode-tool session interrupt <session_id>
 # Run
 opencode-tool run "task"
 opencode-tool run --dir /path "task"
-opencode-tool run -m <model> -v <variant> "task"
+opencode-tool run -m <provider>,<model> -v <variant> "task"
 opencode-tool run -s <session_id> "continue"
-opencode-tool run -s <session_id> -m <model> "switch model and continue"
+opencode-tool run -s <session_id> -m <provider>,<model> "switch model and continue"
 opencode-tool run -s <session_id> -v <variant> "switch variant and continue"
 opencode-tool run -s <session_id> --steer "new direction"
 
@@ -345,7 +345,7 @@ opencode-tool run -s ses_abc123 "Continue where you left off"
 
 ### Changing Model Mid-Session
 ```bash
-opencode-tool run -s ses_abc123 -m openai/gpt-5.5 "Switch to GPT 5.5"
+opencode-tool run -s ses_abc123 -m openai,gpt-5.5 "Switch to GPT 5.5"
 ```
 
 ### Changing Model Variant
@@ -356,16 +356,16 @@ opencode-tool run -s ses_abc123 -v high "Use high reasoning effort"
 
 ### Changing Both Model and Variant
 ```bash
-opencode-tool run -s ses_abc123 -m openai/gpt-5.5 -v high "Switch to GPT 5.5 with high reasoning"
+opencode-tool run -s ses_abc123 -m openai,gpt-5.5 -v high "Switch to GPT 5.5 with high reasoning"
 ```
 
 ### Steering to Different Model
 ```bash
 # Interrupt and switch to different model
-opencode-tool run -s ses_abc123 -m openai/gpt-5.5 --steer "Focus on unit tests"
+opencode-tool run -s ses_abc123 -m openai,gpt-5.5 --steer "Focus on unit tests"
 
 # Interrupt and switch to different model + variant
-opencode-tool run -s ses_abc123 -m openai/gpt-5.5 -v high --steer "Focus on unit tests"
+opencode-tool run -s ses_abc123 -m openai,gpt-5.5 -v high --steer "Focus on unit tests"
 
 # Interrupt and only change variant (retains model)
 opencode-tool run -s ses_abc123 -v high --steer "Focus on unit tests"

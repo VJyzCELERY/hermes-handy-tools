@@ -5,6 +5,7 @@ from rich.console import Console
 
 from . import __version__
 from .commands import config, server, session, permission, question, run, skills
+from .commands.model import model as model_cmd
 
 console = Console()
 
@@ -24,6 +25,7 @@ cli.add_command(permission)
 cli.add_command(question)
 cli.add_command(run)
 cli.add_command(skills)
+cli.add_command(model_cmd)
 
 
 if __name__ == "__main__":
