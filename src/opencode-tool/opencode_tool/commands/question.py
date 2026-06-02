@@ -217,6 +217,27 @@ def reply(request_id: str, answers: tuple):
 
 
 @question.command()
+@click.argument("session_id")
+def dismiss(session_id: str):
+    """Dismiss a pending question by interrupting the session.
+
+    This stops the agent and clears the question block.
+    Use when question is not registered in API (shows 'may need TUI to reply').
+    """
+    import requests as req
+    api = OpenCodeAPI()
+
+    # Abort the session to clear the question block
+    try:
+        api.abort_session(session_id)
+        console.print(f"[green]dismissed: {session_id}[/green]")
+        console.print(f"[dim]Session interrupted — agent stopped, question cleared[/dim]")
+    except Exception as e:
+        console.print(f"[red]failed to dismiss: {e}[/red]")
+        raise SystemExit(1)
+
+
+@question.command()
 @click.argument("request_id")
 def reject(request_id: str):
     """Reject a pending question request."""

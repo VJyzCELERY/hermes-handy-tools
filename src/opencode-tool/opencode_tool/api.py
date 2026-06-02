@@ -106,7 +106,23 @@ class OpenCodeAPI:
         """Reject a question request."""
         result = self._post(f"/question/{request_id}/reject")
         return result is True
-    
+
+    def _patch(self, path: str, data: dict) -> Any:
+        """Make a PATCH request."""
+        try:
+            resp = requests.patch(f"{self.base_url}{path}", json=data, auth=self.auth, timeout=10)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"API error: {e}")
+
+    def patch_part(self, session_id: str, message_id: str, part_id: str, state: dict) -> dict:
+        """Patch a message part's state (e.g., dismiss a question tool call)."""
+        return self._patch(
+            f"/session/{session_id}/message/{message_id}/part/{part_id}",
+            {"state": state}
+        )
+
     def create_session(self, model: Optional[str] = None, variant: Optional[str] = None,
                        directory: Optional[str] = None, provider: Optional[str] = None) -> dict:
         """Create a new session.
