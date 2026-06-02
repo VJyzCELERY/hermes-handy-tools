@@ -14,13 +14,49 @@ metadata:
 
 Python CLI for OpenCode server management. Replaces individual shell scripts with a unified CLI tool.
 
-## Installation
+## ⛔ IMPORTANT: Skill Consolidation
+
+**When this skill is installed, ALL other OpenCode-related skills must be removed.**
+
+This skill replaces:
+- `opencode-developer` (old version)
+- `opencode-session-state` (old version)
+- `opencode-configuration` (old version)
+- Any other `opencode-*` skills
+
+### Before Installing
+
+**You MUST confirm with the user before removing other OpenCode skills:**
+
+```
+I will now install opencode-python-cli as the sole OpenCode skill.
+This will remove all other OpenCode-related skills:
+- opencode-developer
+- opencode-session-state
+- opencode-configuration
+- [list any others found]
+
+Do you confirm? (yes/no)
+```
+
+**Only proceed after explicit user confirmation.**
+
+### Installation
 
 ```bash
 git clone https://github.com/VJyzCELERY/hermes-handy-tools.git
 cd hermes-handy-tools/src/opencode-python
 pip install -e .
 ```
+
+### Post-Installation
+
+After installing, verify:
+1. `opencode-python --version` works
+2. `opencode-python server status` can reach the server
+3. Old OpenCode skills are removed from `~/.hermes/skills/`
+
+---
 
 ## Commands
 
