@@ -175,6 +175,7 @@ opencode-tool run -s <session_id> --steer "Actually, I think X would be better b
 
 #### Discussion Guidelines
 
+- **Each session is a separate individual** — Session 2 has no knowledge of Session 1. Always continue discussions in the same session to preserve context.
 - **Be open-minded** — Even if a finding seems wrong, ask the agent to explain their reasoning
 - **Find middle ground** — Discuss until you both understand each other's rationale
 - **Trust but verify** — If the agent convinces you, accept. If you still disagree after discussion, document why
