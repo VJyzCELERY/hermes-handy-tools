@@ -732,6 +732,33 @@ rejected: req_abc123
 
 ---
 
+### `opencode-tool question dismiss <session_id>`
+
+Dismiss a pending question by aborting the session. Clears stuck question blocks when the question isn't registered in the API.
+
+**Syntax:**
+```bash
+opencode-tool question dismiss <session_id>
+```
+
+**Output:**
+```
+dismissed: ses_abc123
+Session interrupted — agent stopped, question cleared
+```
+
+**Use Cases:**
+- Question not registered in API (shows "may need TUI to reply" in `get` output)
+- Stuck on a question with no way to answer via CLI
+- Need to quickly unblock a session
+
+**Notes:**
+- This aborts the session — the agent stops processing
+- You can send a new message after dismiss to continue the session
+- Prefer `question reply` or `question reject` when the question is registered
+
+---
+
 ## Skills Commands
 
 ### `opencode-tool skills list`
@@ -1010,6 +1037,9 @@ opencode-tool question get <session_id>
 
 # Reply to question
 opencode-tool question reply <request_id> "Answer"
+
+# Dismiss stuck question (aborts session)
+opencode-tool question dismiss <session_id>
 ```
 
 ### "Session stuck"

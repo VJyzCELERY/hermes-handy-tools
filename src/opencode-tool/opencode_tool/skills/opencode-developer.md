@@ -137,7 +137,7 @@ opencode-tool    opencode-tool
 ### When Blocked (HITL)
 
 1. **Permission blocked** — `opencode-tool permission grant <session_id> once|always|reject`
-2. **Question blocked** — `opencode-tool question reply <request_id> "Answer"`
+2. **Question blocked** — `opencode-tool question reply <request_id> "Answer"` or `opencode-tool question dismiss <session_id>` to abort
 3. **Never ignore HITL** — Always resolve before continuing
 
 ### When Steering
@@ -244,6 +244,9 @@ opencode-tool question reply <request_id> "Option A"
 
 # Reject question
 opencode-tool question reject <request_id>
+
+# Dismiss stuck question (aborts session)
+opencode-tool question dismiss <session_id>
 ```
 
 ### Step 5: Interrupt (if needed)
@@ -294,7 +297,7 @@ opencode-tool session interrupt <session_id>
 | `busy` | Session processing | Wait or monitor |
 | `retry` | Retrying after failure | Wait for backoff |
 | Permission blocked | Waiting for permission | `opencode-tool permission grant` |
-| Question blocked | Waiting for answer | `opencode-tool question reply` |
+| Question blocked | Waiting for answer | `opencode-tool question reply` or `dismiss` |
 
 ---
 
@@ -345,6 +348,7 @@ opencode-tool permission grant <session_id> once|always|reject
 opencode-tool question get <session_id>
 opencode-tool question reply <request_id> "Answer"
 opencode-tool question reject <request_id>
+opencode-tool question dismiss <session_id>
 
 # Config
 opencode-tool config get

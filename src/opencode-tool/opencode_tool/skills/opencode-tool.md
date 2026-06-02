@@ -90,6 +90,7 @@ opencode-tool permission grant <sid> once|always|reject  # Grant
 opencode-tool question get <sid>         # Get pending questions
 opencode-tool question reply <qid> "Answer"  # Reply
 opencode-tool question reject <qid>      # Reject
+opencode-tool question dismiss <sid>     # Dismiss (aborts session)
 ```
 
 ## Skills
@@ -128,6 +129,8 @@ opencode-tool permission grant $sid once
 # Handle question block
 opencode-tool question get $sid
 opencode-tool question reply <qid> "Answer"
+# Or dismiss stuck question:
+opencode-tool question dismiss $sid
 
 # Steer a session
 opencode-tool run -s $sid --steer "New direction"
