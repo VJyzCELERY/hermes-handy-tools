@@ -5,8 +5,9 @@ Python CLI for OpenCode server management. Replaces individual shell scripts wit
 ## For Agents: Installation
 
 ```bash
-# Navigate to the subproject
-cd /path/to/hermes-handy-tools/src/opencode-python
+# Clone the repository
+git clone https://github.com/VJyzCELERY/hermes-handy-tools.git
+cd hermes-handy-tools/src/opencode-python
 
 # Install in development mode
 pip install -e .
@@ -109,7 +110,6 @@ opencode-python config set opencode_server_url http://localhost:4096
 - `opencode-python skills list` - List available skills
 - `opencode-python skills get [name]` - Get skill content
 - `opencode-python skills export [file]` - Export skills to file
-- `opencode-python skills install <file>` - Install skill from file
 
 ### Configuration
 - `opencode-python config get` - Show all config

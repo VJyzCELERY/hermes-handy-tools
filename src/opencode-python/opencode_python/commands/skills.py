@@ -54,7 +54,7 @@ def get_skill(name: str):
 @click.argument("file_path", required=False)
 @click.option("--name", "-n", multiple=True, help="Export specific skill(s) by name")
 def export_skills(file_path: str, name: tuple):
-    """Export skills to a file. If no file path, export all skills."""
+    """Export skills to a file. If no file path, print to stdout."""
     output_path = Path(file_path) if file_path else None
     
     if name:
@@ -83,34 +83,3 @@ def export_skills(file_path: str, name: tuple):
     else:
         # Print to stdout
         print(export_text)
-
-
-@skills.command("install")
-@click.argument("file_path")
-def install_skill(file_path: str):
-    """Install a skill from a file."""
-    source = Path(file_path)
-    if not source.exists():
-        console.print(f"[red]file not found: {file_path}[/red]")
-        raise SystemExit(1)
-    
-    content = source.read_text()
-    
-    # Try to extract name from frontmatter
-    skill_name = source.stem
-    if content.startswith("---"):
-        try:
-            end = content.index("---", 3)
-            frontmatter = content[3:end]
-            for line in frontmatter.strip().split("\n"):
-                if line.startswith("name:"):
-                    skill_name = line.split(":", 1)[1].strip()
-                    break
-        except ValueError:
-            pass
-    
-    # Write to skills directory
-    from ..skills import SKILLS_DIR
-    dest = SKILLS_DIR / f"{skill_name}.md"
-    dest.write_text(content)
-    console.print(f"[green]Installed skill: {skill_name}[/green]")
