@@ -6,22 +6,25 @@ A collection of useful CLI tools and utilities for Hermes Agent workflows.
 
 | Tool | Description | Install |
 |------|-------------|---------|
-| [opencode-python](src/opencode-python/) | Python CLI for OpenCode server management | `cd src/opencode-python && pip install -e .` |
+| [opencode-python](src/opencode-python/) | Python CLI for OpenCode server management | See [README](src/opencode-python/README.md) |
 
-## Usage
+## How To Install
 
-After installation, each tool provides a CLI command:
+1. Clone this repository:
+   ```bash
+   git clone https://github.com/VJyzCELERY/hermes-handy-tools.git
+   cd hermes-handy-tools
+   ```
 
-```bash
-# OpenCode Python CLI
-opencode-python --help
-opencode-python server status
-opencode-python send "task"
-opencode-python session status <session_id>
-```
+2. Navigate to the tool you want to install and follow its README:
+   ```bash
+   cd src/opencode-python
+   # Read the README.md for installation instructions
+   cat README.md
+   ```
 
 ## Adding New Tools
 
 1. Create a new directory in `src/` following the subproject template
 2. Update this README to include the new tool in the table above
-3. Install with `pip install -e .` from the tool's directory
+3. Each tool should have its own README with installation instructions
