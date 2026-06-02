@@ -9,3 +9,9 @@ The `src/` folder contains subprojects — modular components of the MAIN-PROJEC
    - **Python**: `cp -r .agents/templates/subproject-template/subproject-python src/<subproject>/`
 2. Rename the source directory to match your subproject name following your language's convention
 3. Update the config file and `README.md` with the new subproject details
+
+## Available Subprojects
+
+| Subproject | Description |
+|------------|-------------|
+| [opencode-python](opencode-python/) | Python CLI for OpenCode server management |

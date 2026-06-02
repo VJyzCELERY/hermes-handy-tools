@@ -1,17 +1,27 @@
-# MAIN-PROJECT-TEMPLATE
+# Hermes Handy Tools
 
-This template serves as a starting point for multi-subproject repositories. The `src/` directory houses independent subprojects that can be backend services, command-line tools, or frontend interfaces.
+A collection of useful CLI tools and utilities for Hermes Agent workflows.
 
-## Folder Structure
----
+## Tools
+
+| Tool | Description | Install |
+|------|-------------|---------|
+| [opencode-python](src/opencode-python/) | Python CLI for OpenCode server management | `cd src/opencode-python && pip install -e .` |
+
+## Usage
+
+After installation, each tool provides a CLI command:
+
+```bash
+# OpenCode Python CLI
+opencode-python --help
+opencode-python server status
+opencode-python send "task"
+opencode-python session status <session_id>
 ```
-MAIN-PROJECT-TEMPLATE/
-├── docs/                          # Main project-level documentation
-├── src/                           # Source directory for subprojects
-└── ...
-```
 
-## Getting Started
-1. Copy this template as the foundation for your project.
-2. Place unique subprojects in the `src/` directory.
-3. Refer to the `docs/` folder for rules and guidelines.
+## Adding New Tools
+
+1. Create a new directory in `src/` following the subproject template
+2. Update this README to include the new tool in the table above
+3. Install with `pip install -e .` from the tool's directory
