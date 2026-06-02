@@ -624,20 +624,30 @@ opencode-tool permission grant ses_abc123 reject
 
 Get pending questions for a session.
 
+Scans the last assistant message for the latest question tool call (ignoring stale questions from `GET /question` API), then cross-references with the REST API to get the proper `que_` request_id for reply.
+
 **Syntax:**
 ```bash
 opencode-tool question get <session_id>
 ```
 
-**Output:**
+**Output (question registered in API):**
 ```
-Questions: BLOCKED (question tool call pending)
+[que_abc123]
   Q1: Superpower
       If you could have any superpower, which one would you choose?
         1. X-ray vision: See through walls and across distances
         2. Time freeze: Freeze time and do whatever you want
         3. Teleportation: Teleport anywhere in the world
         4. Mind reading: Read people's thoughts
+```
+
+**Output (question not yet registered):**
+```
+[call_abc123]
+  (question not registered in API — may need TUI to reply)
+  Q1: Superpower
+      ...
 ```
 
 **Use Cases:**
@@ -665,20 +675,28 @@ opencode-tool question reply <request_id> "Option A" "Option B"
 
 **Output:**
 ```
-replied: req_abc123
+replied: que_abc123
+  Q1: Option A
+  Q2: Option B
 ```
 
 **Examples:**
 ```bash
 # Single answer
-opencode-tool question reply req_abc123 "Option A"
+opencode-tool question reply que_abc123 "Option A"
 
-# Multiple answers
-opencode-tool question reply req_abc123 "Option A" "Option B"
+# Multiple answers (one per sub-question, quoted separately)
+opencode-tool question reply que_abc123 "Option A" "Option B"
 
 # Numeric choice
-opencode-tool question reply req_abc123 "1"
+opencode-tool question reply que_abc123 "1"
 ```
+
+**How it finds the question:**
+1. `GET /question` by id (fast path)
+2. `GET /question` by `tool.callID` mapping
+3. Scans active sessions' messages
+4. If not found, sends raw answers as-is
 
 **Use Cases:**
 - Answering agent questions
@@ -688,7 +706,8 @@ opencode-tool question reply req_abc123 "1"
 **Notes:**
 - Answers must match option labels or numbers
 - Multiple answers for multi-select questions
-- Use `get` first to see available options
+- Use `get` first to see available options and the request_id
+- Pass answers as separate quoted strings, NOT as a JSON array
 
 ---
 
