@@ -1,7 +1,7 @@
 ---
 name: opencode-developer
 description: "Primary skill for all OpenCode interactions — CLI-first, API-based HITL, session tracking."
-version: 5.1.0
+version: 5.2.0
 author: hermes
 platforms: [linux, macos, wsl]
 metadata:
@@ -145,7 +145,41 @@ opencode-tool    opencode-tool
 1. **Use `--steer` flag** — `opencode-tool run -s <session_id> --steer "New direction"`
 2. **This interrupts + sends** — Single operation, no manual interrupt needed
 
----
+### Working with OpenCode Agents
+
+**OpenCode agents are your colleagues, not just fire-and-forget tools.** While sessions are autonomous, you can always send follow-up messages to continue the conversation.
+
+#### Core Principles
+
+1. **Treat agents as colleagues** — They may catch things you missed or offer better solutions
+2. **Discuss when unclear** — If a result, suggestion, or finding doesn't make sense, ask the agent to explain
+3. **Steer when needed** — If an agent's approach seems wrong, redirect them with better context
+4. **Be collaborative** — The goal is to find the best solution together, not to dictate
+5. **Maintain authority** — You have final say, but don't be dismissive
+
+#### How to Discuss
+
+```bash
+# Ask for clarification on a result
+opencode-tool run -s <session_id> "Can you explain why you chose this approach?"
+
+# Challenge a finding respectfully
+opencode-tool run -s <session_id> "I see your point on #3, but what if we..."
+
+# Ask for alternatives
+opencode-tool run -s <session_id> "What other options did you consider?"
+
+# Steer when the approach seems off
+opencode-tool run -s <session_id> --steer "Actually, I think X would be better because..."
+```
+
+#### Discussion Guidelines
+
+- **Be open-minded** — Even if a finding seems wrong, ask the agent to explain their reasoning
+- **Find middle ground** — Discuss until you both understand each other's rationale
+- **Trust but verify** — If the agent convinces you, accept. If you still disagree after discussion, document why
+- **Use the same session** — This preserves context so the agent remembers what they worked on
+- **Discussion is optional** — If you agree with the result, skip straight to the next step
 
 ## Complete Workflow
 
