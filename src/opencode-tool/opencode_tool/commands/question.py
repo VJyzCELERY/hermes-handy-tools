@@ -14,18 +14,60 @@ def question():
     pass
 
 
+def _scan_session_questions(api: OpenCodeAPI, session_id: str):
+    """Scan session messages for pending question tool calls.
+    
+    Fallback when GET /question API misses questions (known issue in v1.15.7+).
+    Returns a list of question-like dicts compatible with the display format.
+    """
+    try:
+        messages = api.get_session_messages(session_id)
+    except:
+        return []
+
+    if not messages:
+        return []
+
+    results = []
+    for msg in messages:
+        info = msg.get("info", {})
+        if info.get("role") != "assistant":
+            continue
+
+        parts = msg.get("parts", [])
+        for part in parts:
+            if part.get("type") == "tool" and part.get("tool") == "question":
+                state = part.get("state", {})
+                if state.get("status") in ("pending", "running", None):
+                    input_data = state.get("input", {})
+                    questions_list = input_data.get("questions", [])
+                    if questions_list:
+                        results.append({
+                            "id": state.get("requestID") or part.get("callID", "?"),
+                            "sessionID": session_id,
+                            "questions": questions_list,
+                        })
+
+    return results
+
+
 @question.command("get")
 @click.argument("session_id")
 def get_questions(session_id: str):
     """List pending question requests for a session."""
     api = OpenCodeAPI()
-    
+
+    # Try the REST API first
     questions = [q for q in api.get_questions() if q.get("sessionID") == session_id]
-    
+
+    # Fallback: scan session messages (GET /question can miss questions in v1.15.7+)
+    if not questions:
+        questions = _scan_session_questions(api, session_id)
+
     if not questions:
         console.print("[yellow]no pending questions[/yellow]")
         return
-    
+
     for q in questions:
         qid = q.get("id", "?")
         console.print(f"[green][{qid}[/green]]")
