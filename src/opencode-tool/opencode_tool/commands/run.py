@@ -40,10 +40,6 @@ def run(
     steer: bool,
 ):
     """Run a prompt on OpenCode server."""
-    # Default --dir to current working directory
-    if not working_dir:
-        working_dir = str(Path.cwd())
-
     # Parse model: comma-delimited "provider,model_name" or just "model_name"
     provider_id = None
     model_id = model
@@ -53,7 +49,13 @@ def run(
         model_id = parts[1].strip()
 
     api = OpenCodeAPI()
-    
+
+    # Default --dir to current working directory only for localhost servers
+    if not working_dir:
+        server_url = api.base_url or ""
+        if "localhost" in server_url or "127.0.0.1" in server_url:
+            working_dir = str(Path.cwd())
+
     # Get config defaults
     config_model = get_config_value("default_model")
     config_variant = get_config_value("default_variant")
