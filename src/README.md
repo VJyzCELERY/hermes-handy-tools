@@ -14,4 +14,4 @@ The `src/` folder contains subprojects — modular components of the MAIN-PROJEC
 
 | Subproject | Description |
 |------------|-------------|
-| [opencode-python](opencode-python/) | Python CLI for OpenCode server management |
+| [opencode-tool](opencode-tool/) | Python CLI for OpenCode server management |

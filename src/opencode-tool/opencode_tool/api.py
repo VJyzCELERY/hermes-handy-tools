@@ -107,3 +107,99 @@ class OpenCodeAPI:
         """Reject a question request."""
         result = self._post(f"/question/{request_id}/reject")
         return result is True
+    
+    def create_session(self, model: Optional[str] = None, variant: Optional[str] = None, 
+                       directory: Optional[str] = None) -> dict:
+        """Create a new session.
+        
+        Args:
+            model: Model ID (e.g., "mimo-v2.5")
+            variant: Variant (e.g., "high", "max")
+            directory: Working directory
+        
+        Returns:
+            Session info dict with 'id' field
+        """
+        data = {}
+        
+        if model or variant:
+            model_data = {}
+            if model:
+                model_data["id"] = model
+                model_data["providerID"] = "opencode-go"  # Default provider
+            if variant:
+                model_data["variant"] = variant
+            if model_data:
+                data["model"] = model_data
+        
+        if directory:
+            data["directory"] = directory
+        
+        return self._post("/session", data)
+    
+    def send_message_async(self, session_id: str, prompt: str, 
+                           model: Optional[str] = None, variant: Optional[str] = None) -> bool:
+        """Send a message to a session asynchronously (fire and forget).
+        
+        Args:
+            session_id: Session ID
+            prompt: Message text
+            model: Model ID to use (optional, overrides session default)
+            variant: Variant to use (optional)
+        
+        Returns:
+            True if accepted (204), raises on error
+        """
+        data = {
+            "parts": [{"type": "text", "text": prompt}]
+        }
+        
+        if model:
+            data["model"] = {
+                "modelID": model,
+                "providerID": "opencode-go"
+            }
+        
+        if variant:
+            data["variant"] = variant
+        
+        # prompt_async returns 204 (no content) on success
+        try:
+            resp = requests.post(
+                f"{self.base_url}/session/{session_id}/prompt_async",
+                json=data,
+                auth=self.auth,
+                timeout=10
+            )
+            resp.raise_for_status()
+            return True
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"API error: {e}")
+    
+    def send_message(self, session_id: str, prompt: str,
+                     model: Optional[str] = None, variant: Optional[str] = None) -> dict:
+        """Send a message to a session and wait for response.
+        
+        Args:
+            session_id: Session ID
+            prompt: Message text
+            model: Model ID to use (optional)
+            variant: Variant to use (optional)
+        
+        Returns:
+            Response message dict
+        """
+        data = {
+            "parts": [{"type": "text", "text": prompt}]
+        }
+        
+        if model:
+            data["model"] = {
+                "modelID": model,
+                "providerID": "opencode-go"
+            }
+        
+        if variant:
+            data["variant"] = variant
+        
+        return self._post(f"/session/{session_id}/message", data)

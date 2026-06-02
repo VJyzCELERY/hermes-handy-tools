@@ -5,11 +5,14 @@ import os
 from pathlib import Path
 from typing import Optional
 
-CONFIG_DIR = Path.home() / ".config" / "opencode-python-cli"
+CONFIG_DIR = Path.home() / ".config" / "opencode-tool-cli"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG = {
-    "opencode_server_url": "http://localhost:4096"
+    "opencode_server_url": "http://localhost:4096",
+    "monitor_retry_timeout": 60,
+    "default_model": "mimo-v2.5",
+    "default_variant": "high"
 }
 
 

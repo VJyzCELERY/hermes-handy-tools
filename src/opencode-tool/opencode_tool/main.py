@@ -10,7 +10,7 @@ console = Console()
 
 
 @click.group()
-@click.version_option(version=__version__, prog_name="opencode-python")
+@click.version_option(version=__version__, prog_name="opencode-tool")
 def cli():
     """OpenCode Python CLI - Python CLI for OpenCode server management."""
     pass

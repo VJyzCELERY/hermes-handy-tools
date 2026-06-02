@@ -26,7 +26,7 @@ def list_permissions(session_id: str, show_all: bool):
     if session_id:
         permissions = [p for p in permissions if p.get("sessionID") == session_id]
     elif not show_all:
-        console.print("Usage: opencode-python permission list <session_id> | --all")
+        console.print("Usage: opencode-tool permission list <session_id> | --all")
         raise SystemExit(1)
     
     if not permissions:

@@ -6,7 +6,7 @@ A collection of useful CLI tools and utilities for Hermes Agent workflows.
 
 | Tool | Description | Install |
 |------|-------------|---------|
-| [opencode-python](src/opencode-python/) | Python CLI for OpenCode server management | See [README](src/opencode-python/README.md) |
+| [opencode-tool](src/opencode-tool/) | Python CLI for OpenCode server management | See [README](src/opencode-tool/README.md) |
 
 ## How To Install
 
@@ -18,7 +18,7 @@ A collection of useful CLI tools and utilities for Hermes Agent workflows.
 
 2. Navigate to the tool you want to install and follow its README:
    ```bash
-   cd src/opencode-python
+   cd src/opencode-tool
    # Read the README.md for installation instructions
    cat README.md
    ```
