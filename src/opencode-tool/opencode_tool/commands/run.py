@@ -21,7 +21,7 @@ DB_PATH = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
 @click.option("-c", "--continue", "continue_last", is_flag=True, help="Continue the last session")
 @click.option("-s", "--session", "session_id", help="Continue a specific session")
 @click.option("-t", "--title", help="Session title (new sessions only)")
-@click.option("-d", "--dir", "working_dir", default=None, help="Working directory")
+@click.option("-d", "--dir", "working_dir", default=None, help="Working directory (defaults to current directory)")
 @click.option("-w", "--wait", is_flag=True, help="Wait for completion")
 @click.option("--json", "json_out", is_flag=True, help="Output JSON")
 @click.option("-m", "--model", help="Model to use: provider,model_name or just model_name (default: from config)")
@@ -40,6 +40,10 @@ def run(
     steer: bool,
 ):
     """Run a prompt on OpenCode server."""
+    # Default --dir to current working directory
+    if not working_dir:
+        working_dir = str(Path.cwd())
+
     # Parse model: comma-delimited "provider,model_name" or just "model_name"
     provider_id = None
     model_id = model
