@@ -42,10 +42,10 @@ class OpenCodeAPI:
         except requests.exceptions.RequestException as e:
             raise Exception(f"API error: {e}")
     
-    def _post(self, path: str, data: Optional[dict] = None) -> Any:
+    def _post(self, path: str, data: Optional[dict] = None, headers: Optional[dict] = None) -> Any:
         """Make a POST request."""
         try:
-            resp = requests.post(f"{self.base_url}{path}", json=data, auth=self.auth, timeout=10)
+            resp = requests.post(f"{self.base_url}{path}", json=data, auth=self.auth, headers=headers or {}, timeout=10)
             resp.raise_for_status()
             return resp.json()
         except requests.exceptions.RequestException as e:
@@ -114,7 +114,7 @@ class OpenCodeAPI:
         Args:
             model: Model ID (e.g., "mimo-v2.5")
             variant: Variant (e.g., "high", "max")
-            directory: Working directory
+            directory: Working directory (sent via x-opencode-directory header)
             provider: Provider ID (e.g., "opencode-go"). If None, server uses default.
         
         Returns:
@@ -133,10 +133,12 @@ class OpenCodeAPI:
             if model_data:
                 data["model"] = model_data
         
+        # Pass directory via header (server middleware reads x-opencode-directory)
+        headers = {}
         if directory:
-            data["directory"] = directory
+            headers["x-opencode-directory"] = directory
         
-        return self._post("/session", data)
+        return self._post("/session", data, headers=headers)
     
     def send_message_async(self, session_id: str, prompt: str,
                            model: Optional[str] = None, variant: Optional[str] = None,
