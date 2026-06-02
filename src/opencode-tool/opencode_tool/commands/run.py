@@ -124,7 +124,8 @@ def run(
             prompt=prompt,
             model=model_id,
             provider=provider_id,
-            variant=variant
+            variant=variant,
+            directory=working_dir
         )
         
         # Output result

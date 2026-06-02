@@ -142,7 +142,7 @@ class OpenCodeAPI:
     
     def send_message_async(self, session_id: str, prompt: str,
                            model: Optional[str] = None, variant: Optional[str] = None,
-                           provider: Optional[str] = None) -> bool:
+                           provider: Optional[str] = None, directory: Optional[str] = None) -> bool:
         """Send a message to a session asynchronously (fire and forget).
         
         Args:
@@ -151,6 +151,7 @@ class OpenCodeAPI:
             model: Model ID to use (optional, overrides session default)
             variant: Variant to use (optional)
             provider: Provider ID (optional). If None, server uses session default.
+            directory: Working directory (sent via x-opencode-directory header).
         
         Returns:
             True if accepted (204), raises on error
@@ -169,12 +170,18 @@ class OpenCodeAPI:
         if variant:
             data["variant"] = variant
         
+        # Build headers with directory context
+        headers = {}
+        if directory:
+            headers["x-opencode-directory"] = directory
+
         # prompt_async returns 204 (no content) on success
         try:
             resp = requests.post(
                 f"{self.base_url}/session/{session_id}/prompt_async",
                 json=data,
                 auth=self.auth,
+                headers=headers,
                 timeout=10
             )
             resp.raise_for_status()
