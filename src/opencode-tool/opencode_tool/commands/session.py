@@ -385,18 +385,24 @@ def _get_session_info(api: OpenCodeAPI, session_id: str) -> Optional[dict]:
                         status_type = "busy"
                         status_detail = {"type": "busy", "reason": "tool_running", "tools": tool_names}
                     else:
-                        # Check if session was recently updated (within 30 seconds)
-                        time_info = session.get("time", {})
-                        updated = time_info.get("updated", 0)
-                        now = time.time() * 1000
-                        age_ms = now - updated if updated else float('inf')
-                        
-                        if age_ms < 30000:  # Updated within 30 seconds
+                        # Check if last message is from user (agent is processing it)
+                        last_msg_is_user = _check_last_message_is_user(api, session_id)
+                        if last_msg_is_user:
                             status_type = "busy"
-                            status_detail = {"type": "busy", "reason": "recently_updated"}
+                            status_detail = {"type": "busy", "reason": "processing_user_message"}
                         else:
-                            status_type = "idle"
-                            status_detail = {"type": "idle"}
+                            # Check if session was recently updated (within 30 seconds)
+                            time_info = session.get("time", {})
+                            updated = time_info.get("updated", 0)
+                            now = time.time() * 1000
+                            age_ms = now - updated if updated else float('inf')
+                            
+                            if age_ms < 30000:  # Updated within 30 seconds
+                                status_type = "busy"
+                                status_detail = {"type": "busy", "reason": "recently_updated"}
+                            else:
+                                status_type = "idle"
+                                status_detail = {"type": "idle"}
         except:
             return None
     
@@ -487,6 +493,26 @@ def _check_running_tools(api: OpenCodeAPI, session_id: str):
         break  # only check the last assistant message
     
     return running
+
+
+def _check_last_message_is_user(api: OpenCodeAPI, session_id: str):
+    """Check if the last message in the session is from the user.
+    
+    If the last message is from the user, the agent is definitely processing
+    (or queued to process) — even if no tools are running and time.updated
+    is stale. This catches long LLM calls where nothing else changes.
+    """
+    try:
+        messages = api.get_session_messages(session_id)
+    except:
+        return False
+    
+    if not messages:
+        return False
+    
+    last_msg = messages[-1]
+    info = last_msg.get("info", {})
+    return info.get("role") == "user"
 
 
 def _print_session_info(info: dict):
