@@ -71,9 +71,17 @@ class OpenCodeAPI:
         """Get status of all sessions.
         
         Args:
-            directory: Optional directory scope. Without this, the endpoint
-                       returns {} in OpenCode 1.15.7+.
+            directory: Optional directory scope. For localhost servers without
+                       an explicit directory, defaults to cwd (same as run.py).
+                       The endpoint returns {} without directory in 1.15.7+.
         """
+        # Default directory for localhost (matches run.py --dir logic)
+        if directory is None:
+            server_url = self.base_url or ""
+            if "localhost" in server_url or "127.0.0.1" in server_url:
+                from pathlib import Path
+                directory = str(Path.cwd())
+        
         path = "/session/status"
         if directory:
             path += f"?directory={directory}"
