@@ -378,18 +378,25 @@ def _get_session_info(api: OpenCodeAPI, session_id: str) -> Optional[dict]:
                     status_type = "busy"
                     status_detail = {"type": "busy", "reason": "question_pending"}
                 else:
-                    # Check if session was recently updated (within 30 seconds)
-                    time_info = session.get("time", {})
-                    updated = time_info.get("updated", 0)
-                    now = time.time() * 1000
-                    age_ms = now - updated if updated else float('inf')
-                    
-                    if age_ms < 30000:  # Updated within 30 seconds
+                    # Check for running tool calls (bash, edit, patch, etc.)
+                    running_tools = _check_running_tools(api, session_id)
+                    if running_tools:
+                        tool_names = [t.get("tool", "?") for t in running_tools]
                         status_type = "busy"
-                        status_detail = {"type": "busy", "reason": "recently_updated"}
+                        status_detail = {"type": "busy", "reason": "tool_running", "tools": tool_names}
                     else:
-                        status_type = "idle"
-                        status_detail = {"type": "idle"}
+                        # Check if session was recently updated (within 30 seconds)
+                        time_info = session.get("time", {})
+                        updated = time_info.get("updated", 0)
+                        now = time.time() * 1000
+                        age_ms = now - updated if updated else float('inf')
+                        
+                        if age_ms < 30000:  # Updated within 30 seconds
+                            status_type = "busy"
+                            status_detail = {"type": "busy", "reason": "recently_updated"}
+                        else:
+                            status_type = "idle"
+                            status_detail = {"type": "idle"}
         except:
             return None
     
@@ -400,11 +407,18 @@ def _get_session_info(api: OpenCodeAPI, session_id: str) -> Optional[dict]:
     # Check if blocked on question tool
     question_blocked = _check_question_blocked(api, session_id)
     
+    # Check for running tool calls
+    running_tools = _check_running_tools(api, session_id)
+    
     # Override status if blocked
     if session_perms:
         status_type = "busy"
     elif question_blocked is not None:
         status_type = "busy"
+    elif running_tools and status_type == "idle":
+        status_type = "busy"
+        status_detail = {"type": "busy", "reason": "tool_running",
+                        "tools": [t.get("tool", "?") for t in running_tools]}
     
     return {
         "session_id": session_id,
@@ -413,6 +427,7 @@ def _get_session_info(api: OpenCodeAPI, session_id: str) -> Optional[dict]:
         "permissions": session_perms,
         "question_blocked": question_blocked is not None,
         "question_data": question_blocked,
+        "running_tools": running_tools,
     }
 
 
@@ -441,6 +456,37 @@ def _check_question_blocked(api: OpenCodeAPI, session_id: str):
         break
     
     return None
+
+
+def _check_running_tools(api: OpenCodeAPI, session_id: str):
+    """Check if session has any running tool calls in the last assistant message.
+    
+    Returns list of running tool parts, or empty list.
+    Catches tools like bash, edit, patch, write etc. that are in progress.
+    """
+    try:
+        messages = api.get_session_messages(session_id)
+    except:
+        return []
+    
+    if not messages:
+        return []
+    
+    running = []
+    for msg in reversed(messages):
+        info = msg.get("info", {})
+        if info.get("role") != "assistant":
+            continue
+        
+        parts = msg.get("parts", [])
+        for part in parts:
+            if part.get("type") == "tool":
+                state = part.get("state", {})
+                if state.get("status") in ("pending", "running", None):
+                    running.append(part)
+        break  # only check the last assistant message
+    
+    return running
 
 
 def _print_session_info(info: dict):
@@ -495,6 +541,14 @@ def _print_session_info(info: dict):
                         console.print(f"        {j}. {opt.get('label', '?')}: {opt.get('description', '')}")
     else:
         console.print("Questions: none")
+    
+    # Running tools
+    running_tools = info.get('running_tools', [])
+    if running_tools:
+        tool_names = [t.get("tool", "?") for t in running_tools]
+        console.print(f"\nTools:    [yellow]{', '.join(tool_names)}[/yellow] running")
+    elif info['status'] == 'busy' and info.get('detail', {}).get('reason') == 'tool_running':
+        console.print(f"\nTools:    [yellow]running[/yellow]")
 
 
 def _monitor_session(api: OpenCodeAPI, session_id: str, interval: int):
