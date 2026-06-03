@@ -350,16 +350,27 @@ def _get_session_info(api: OpenCodeAPI, session_id: str) -> Optional[dict]:
     """Get full session info."""
     import time
     
-    # Check session status from API
+    # Check session status from API — try without directory first
     statuses = api.get_session_status()
     status = statuses.get(session_id)
+    
+    # If empty, retry with session's directory (required in 1.15.7+)
+    if status is None:
+        try:
+            session_preview = api.get_session(session_id)
+            session_dir = (session_preview or {}).get("directory")
+            if session_dir:
+                statuses = api.get_session_status(directory=session_dir)
+                status = statuses.get(session_id)
+        except:
+            pass
     
     if status is not None:
         # API provided status
         status_type = status.get("type", "unknown")
         status_detail = status
     else:
-        # API returned empty — infer status from session data
+        # API still empty — infer status from session data
         try:
             session = api.get_session(session_id)
             if not session:

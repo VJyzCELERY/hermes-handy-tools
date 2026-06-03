@@ -67,9 +67,17 @@ class OpenCodeAPI:
         """List all sessions."""
         return self._get("/session")
     
-    def get_session_status(self) -> dict:
-        """Get status of all sessions."""
-        return self._get("/session/status")
+    def get_session_status(self, directory: str = None) -> dict:
+        """Get status of all sessions.
+        
+        Args:
+            directory: Optional directory scope. Without this, the endpoint
+                       returns {} in OpenCode 1.15.7+.
+        """
+        path = "/session/status"
+        if directory:
+            path += f"?directory={directory}"
+        return self._get(path)
     
     def get_session(self, session_id: str) -> dict:
         """Get session details."""
