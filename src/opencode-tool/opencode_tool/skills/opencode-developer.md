@@ -68,6 +68,46 @@ opencode-tool server serve
 
 ### Rule 4: ALWAYS Use `--dir` for Worktree Tasks
 
+**Profile Isolation with Tmux:**
+
+opencode-tool uses tmux for profile isolation when available. This ensures:
+
+- Each profile gets its own tmux session
+- Shell persists across `terminal()` calls
+- Cleaner can detect active profiles safely
+- Multiple sessions can run concurrently
+
+**Check if tmux is installed:**
+
+```bash
+tmux -V
+```
+
+**Install tmux if not available:**
+
+```bash
+sudo apt-get install tmux  # Ubuntu/Debian
+brew install tmux          # macOS
+sudo pacman -S tmux        # Arch Linux
+```
+
+**How it works:**
+
+1. First `opencode-tool run` creates tmux session: `opencode-{name}`
+2. Server starts inside tmux: `opencode serve --port {port}`
+3. Env vars set: `OPENCODE_SERVER_URL`, `OPENCODE_TOOL_PROFILE`
+4. Subsequent calls reuse the same profile via env vars
+5. Tmux session stays alive until:
+   - Profile terminated: `opencode-tool profile terminate <name>`
+   - Cleaner detects staleness: `last_used_at` > 10 minutes
+   - Tmux session killed externally
+
+**Benefits:**
+
+- Shell PID persists across `terminal()` calls (it's the tmux shell)
+- Cleaner won't kill active servers mid-generation
+- Multiple Hermes sessions can run concurrently
+
 When running tasks in a specific directory:
 
 ```bash
@@ -136,9 +176,12 @@ opencode-tool    opencode-tool
 
 ### When Blocked (HITL)
 
-1. **Permission blocked** — `opencode-tool permission grant <session_id> once|always|reject`
-2. **Question blocked** — `opencode-tool question reply <request_id> "Answer"` or `opencode-tool question dismiss <session_id>` to abort
-3. **Never ignore HITL** — Always resolve before continuing
+1. **Use unified HITL command** — `opencode-tool hitl detect <session_id>`
+2. **Permission blocked** — `opencode-tool hitl respond <session_id> once|always|reject`
+3. **Question blocked** — `opencode-tool hitl respond <session_id> "Answer"`
+4. **Dismiss (stop agent)** — `opencode-tool hitl dismiss <session_id>`
+5. **Never ignore HITL** — Always resolve before continuing
+6. **Legacy commands still work** — `permission grant`, `question reply` for precision control
 
 ### When Steering
 

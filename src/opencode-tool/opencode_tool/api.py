@@ -8,15 +8,36 @@ from typing import Any, Optional
 import requests
 
 from .config import get_server_url, get_config_value
-
+from .registry import update_server_last_used, find_server_by_url
 class OpenCodeAPI:
     """OpenCode server API client."""
     
     def __init__(self, base_url: Optional[str] = None):
         self.base_url = base_url or get_server_url()
         self._setup_auth()
+        self._server_id = None
+
+    def _find_server_id(self) -> Optional[str]:
+        """Find server ID for current base_url."""
+        if self._server_id:
+            return self._server_id
+        server = find_server_by_url(self.base_url)
+        if server:
+            self._server_id = server.get("id")
+            return self._server_id
+        return None
+
+    def _refresh_last_used(self):
+        """Refresh last_used_at timestamp for the current server."""
+        server_id = self._find_server_id()
+        if server_id:
+            try:
+                update_server_last_used(server_id)
+            except Exception:
+                pass  # Non-critical, don't fail the request
     
     def _setup_auth(self):
+        """Setup authentication from config."""
         """Setup authentication from config."""
         self.auth = None
         
@@ -35,6 +56,7 @@ class OpenCodeAPI:
     
     def _get(self, path: str) -> Any:
         """Make a GET request."""
+        self._refresh_last_used()
         try:
             resp = requests.get(f"{self.base_url}{path}", auth=self.auth, timeout=10)
             resp.raise_for_status()
@@ -44,6 +66,7 @@ class OpenCodeAPI:
     
     def _post(self, path: str, data: Optional[dict] = None, headers: Optional[dict] = None) -> Any:
         """Make a POST request."""
+        self._refresh_last_used()
         try:
             resp = requests.post(f"{self.base_url}{path}", json=data, auth=self.auth, headers=headers or {}, timeout=10)
             resp.raise_for_status()
@@ -254,7 +277,7 @@ class OpenCodeAPI:
     
     def list_models(self) -> list:
         """List all available models from all providers.
-        
+
         Returns:
             List of model dicts with provider, model_id, name fields
         """
@@ -263,7 +286,7 @@ class OpenCodeAPI:
             providers = data.get("all", [])
         except Exception:
             return []
-        
+
         models = []
         for provider in providers:
             provider_id = provider.get("id", "")
@@ -284,3 +307,53 @@ class OpenCodeAPI:
                         "name": m.get("name", m.get("id", "")),
                     })
         return models
+
+    # ── TUI methods (safe — publish events, no consumption) ──
+
+    def tui_execute_command(self, command: str) -> bool:
+        """Execute a TUI command (publishes event, no race condition)."""
+        result = self._post("/tui/execute-command", {"command": command})
+        return result is True
+
+    def tui_publish(self, event_type: str, properties: dict) -> bool:
+        """Publish a TUI event."""
+        result = self._post("/tui/publish", {"type": event_type, "properties": properties})
+        return result is True
+
+    def tui_show_toast(self, message: str, title: Optional[str] = None,
+                       variant: str = "info") -> bool:
+        """Show a toast notification in the TUI."""
+        data: dict[str, Any] = {"message": message, "variant": variant}
+        if title:
+            data["title"] = title
+        result = self._post("/tui/show-toast", data)
+        return result is True
+
+    def tui_select_session(self, session_id: str) -> bool:
+        """Navigate TUI to a specific session."""
+        result = self._post("/tui/select-session", {"sessionID": session_id})
+        return result is True
+
+    def tui_control_next(self, timeout: int = 5) -> Optional[dict]:
+        """Long-poll for the next TUI control request.
+
+        Returns the request dict or None on timeout.
+        Only useful in isolated mode (no competition).
+        """
+        try:
+            resp = requests.get(
+                f"{self.base_url}/tui/control/next",
+                auth=self.auth,
+                timeout=timeout,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return data if data else None
+            return None
+        except Exception:
+            return None
+
+    def tui_control_response(self, body: Any) -> bool:
+        """Respond to a TUI control request."""
+        result = self._post("/tui/control/response", {"body": body})
+        return result is True

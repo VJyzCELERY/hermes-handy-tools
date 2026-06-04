@@ -1,7 +1,7 @@
 ---
 name: opencode-tool
-description: "Quick CLI command reference. For detailed documentation with use cases, see opencode-tool-commands."
-version: 1.0.0
+description: "Quick CLI command reference for opencode-tool — profile system, HITL, session management."
+version: 1.2.0
 author: hermes
 platforms: [linux, macos, wsl]
 metadata:
@@ -12,102 +12,189 @@ metadata:
 
 # OpenCode Python CLI — Quick Reference
 
-Fast reference for all `opencode-tool` commands. For detailed documentation with use cases, examples, and troubleshooting, see `opencode-tool-commands`.
-
-**Entrypoint:** `opencode-developer` — Load this skill first for behavioral rules and workflow.
-
-**⚠️ Server Commands:** `opencode-tool server serve` and `opencode-tool server stop` require the `opencode` CLI to be installed.
+**⚠️ Testing:** Use `uv run --project . -m opencode_tool.main` from project dir.
 
 ---
 
 ## ⛔ Critical Rules
 
 1. **ALWAYS use `opencode-tool`** — NEVER `opencode` CLI or `curl`
-2. **ALWAYS check server first** — `opencode-tool server status`
-3. **ALWAYS use `--dir`** — For worktree tasks: `opencode-tool run --dir "$(pwd)" "task"`
+2. **Profile-first** — Every command runs in a profile
+3. **Default profile** — Auto-created from config, connects to existing server
 
 ---
 
-## Server
+## Profile System
+
+**One profile = one opencode server connection (with tmux isolation).**
 
 ```bash
-opencode-tool server status              # Check server
-opencode-tool server serve               # Start server
-opencode-tool server stop                # Stop server
+# Create profile (auto-persists to file)
+opencode-tool profile set myproject
+opencode-tool profile set              # random UUID name
+
+# List profiles
+opencode-tool profile list
+
+# Check current
+opencode-tool profile current
+
+# Switch to different profile
+opencode-tool profile set other-project
+
+# Delete profile
+opencode-tool profile delete myproject
+
+# Terminate (kill server + delete)
+opencode-tool profile terminate myproject
+
+# Clean orphaned profiles
+opencode-tool profile cleanup
+opencode-tool profile cleanup --dry-run
+
+# Initialize default profile (from config)
+opencode-tool profile init
 ```
+
+**How profiles work:**
+- First command auto-creates profile if none active
+- **With tmux (recommended):** Each profile gets its own tmux session
+  - Tmux session keeps shell alive across `terminal()` calls
+  - PID-based `active-profile` file works correctly
+  - Cleaner detects tmux session liveness for safe cleanup
+- **Without tmux (legacy):** Each shell gets its own profile (PID-based)
+  - Profile persists to `~/.opencode-tool/active-profile-<pid>`
+  - ⚠️ Fails for Hermes: each `terminal()` call creates new PID
+- Default profile connects to config URL (http://localhost:4096)
+- New profiles fork settings from default
+
+### Tmux Isolation (Recommended)
+
+```bash
+# tmux must be installed for automatic isolation
+tmux -V  # Check if tmux is installed
+
+# Install tmux (if not installed)
+sudo apt-get install tmux  # Ubuntu/Debian
+brew install tmux          # macOS
+sudo pacman -S tmux        # Arch Linux
+```
+
+**How it works:**
+
+1. `opencode-tool run "task"` → creates tmux session `opencode-{name}`
+2. Starts opencode server inside tmux: `opencode serve --port {port}`
+3. Sets env vars: `OPENCODE_SERVER_URL`, `OPENCODE_TOOL_PROFILE`
+4. Subsequent calls reuse the same profile via env vars
+5. Tmux session stays alive until:
+   - Profile is terminated: `opencode-tool profile terminate <name>`
+   - Cleaner detects staleness: `last_used_at` > 10 minutes
+   - Tmux session is killed externally
+
+**Benefits for Hermes:**
+
+- Shell PID persists across `terminal()` calls (it's the tmux shell)
+- Cleaner won't kill active servers mid-generation
+- Multiple Hermes sessions can run concurrently
+
+### Legacy PID-Based Isolation (Without tmux)
+
+⚠️ **Not recommended for Hermes** — each `terminal()` call creates a new shell with a new PID, causing the cleaner to mark active profiles as orphaned.
+
+**Workaround if tmux is not available:**
+
+```python
+# Must chain commands to preserve env vars
+terminal(command='eval "$(opencode-tool run \'task1\' 2>&1 >/dev/null)" && opencode-tool run \'task2\'')
+```
+
+---
+
+## Two Ways to Get a Server
+
+**Option 1: Connect to existing server**
+```bash
+opencode-tool profile init              # creates default profile
+# or
+opencode-tool profile set --collaborate myuser --url http://localhost:4096
+```
+
+**Option 2: Start new server**
+```bash
+opencode-tool profile set myproject     # auto-starts on random port
+```
+
+---
 
 ## Session
 
 ```bash
-opencode-tool session list               # List all sessions
-opencode-tool session list --filter busy # List busy sessions
-opencode-tool session list --filter active  # List active (busy+blocked)
-opencode-tool session list --filter blocked  # List blocked sessions
-opencode-tool session list --filter permission-block  # Permission blocked
-opencode-tool session list --filter question-block  # Question blocked
-opencode-tool session list --filter idle    # List completed sessions
-opencode-tool session search <query>     # Search sessions
-opencode-tool session get <sid>          # Get session details
-opencode-tool session get <sid> --response  # Get last response
-opencode-tool session get <sid> --response --hide-tools  # Response text only
-opencode-tool session messages <sid>     # Get all messages
-opencode-tool session messages <sid> --last 5  # Last 5 messages
-opencode-tool session messages <sid> --role assistant  # Only assistant
-opencode-tool session messages <sid> --hide-tools  # No tool calls
-opencode-tool session messages <sid> --limit 10 --offset 20  # Pagination
-opencode-tool session status <sid>       # Check status
-opencode-tool session status <sid> --monitor  # Monitor until blocked/idle
-opencode-tool session interrupt <sid>    # Abort session
+opencode-tool session list
+opencode-tool session list --filter busy|active|blocked|idle
+opencode-tool session search <query>
+opencode-tool session get <sid>
+opencode-tool session get <sid> --response
+opencode-tool session messages <sid> --last 5
+opencode-tool session status <sid> --monitor
+opencode-tool session interrupt <sid>
 ```
 
 ## Run
 
 ```bash
-opencode-tool run "task"                 # New session
-opencode-tool run --dir /path "task"     # With working directory
-opencode-tool run -m <provider>,<model> -v <variant> "task"  # Model + variant
-opencode-tool run -s <sid> "continue"    # Continue session
-opencode-tool run -s <sid> -m <provider>,<model> "continue"  # Switch model
-opencode-tool run -s <sid> -v <variant> "continue"  # Switch variant only
-opencode-tool run -s <sid> -m <provider>,<model> -v <variant> "continue"  # Switch both
-opencode-tool run -s <sid> --steer "dir" # Interrupt + steer
-opencode-tool run -s <sid> -m <provider>,<model> --steer "dir"  # Steer + switch model
-opencode-tool run -s <sid> -m <provider>,<model> -v <variant> --steer "dir"  # Steer + switch both
-opencode-tool run -s <sid> "queue msg"   # Queue (no interrupt)
+opencode-tool run "task"
+opencode-tool run --dir /path "task"
+opencode-tool run -m <provider>,<model> -v <variant> "task"
+opencode-tool run -s <sid> "continue"
+opencode-tool run -s <sid> --steer "new direction"
 ```
 
-## Permissions
+## HITL (Human-In-The-Loop)
 
 ```bash
-opencode-tool permission list <sid>      # List pending for session
-opencode-tool permission list --all      # List all pending
-opencode-tool permission grant <sid> once|always|reject  # Grant
+opencode-tool hitl detect <sid>
+opencode-tool hitl detect <sid> --wait
+opencode-tool hitl respond <sid> "yes"       # answer question
+opencode-tool hitl respond <sid> once         # grant permission
+opencode-tool hitl respond <sid> reject       # reject
+opencode-tool hitl dismiss <sid>              # stop agent
 ```
 
-## Questions
+## Permissions (legacy)
 
 ```bash
-opencode-tool question get <sid>         # Get pending questions
-opencode-tool question reply <qid> "Answer"  # Reply
-opencode-tool question reject <qid>      # Reject
-opencode-tool question dismiss <sid>     # Dismiss (aborts session)
+opencode-tool permission list <sid>
+opencode-tool permission grant <sid> once|always|reject
 ```
 
-## Skills
+## Questions (legacy)
 
 ```bash
-opencode-tool skills list                # List available skills
-opencode-tool skills get [name]          # Get skill content
-opencode-tool skills export [file]       # Export skills
+opencode-tool question get <sid>
+opencode-tool question reply <qid> "Answer"
+opencode-tool question dismiss <sid>
+```
+
+## Server
+
+```bash
+opencode-tool server status
+opencode-tool server serve
+opencode-tool server stop
 ```
 
 ## Config
 
 ```bash
-opencode-tool config get                 # Show all config
-opencode-tool config get <key>           # Get specific value
-opencode-tool config set <key> <value>   # Set value
-opencode-tool config path                # Show config file path
+opencode-tool config get
+opencode-tool config set <key> <value>
+```
+
+## Skills
+
+```bash
+opencode-tool skills list
+opencode-tool skills get [name]
 ```
 
 ---
@@ -115,35 +202,17 @@ opencode-tool config path                # Show config file path
 ## Common Patterns
 
 ```bash
-# Pre-flight check
-opencode-tool server status || opencode-tool server serve
+# Connect to existing server
+opencode-tool profile init
 
-# Run and monitor
-sid=$(opencode-tool run --dir "$(pwd)" "task")
-opencode-tool session status $sid --monitor
+# Start new isolated server
+opencode-tool profile set myproject
 
-# Handle permission block
-opencode-tool permission list $sid
-opencode-tool permission grant $sid once
+# Run and handle HITL
+sid=$(opencode-tool run "task")
+opencode-tool hitl detect $sid
+opencode-tool hitl respond $sid "yes"
 
-# Handle question block
-opencode-tool question get $sid
-opencode-tool question reply <qid> "Answer"
-# Or dismiss stuck question:
-opencode-tool question dismiss $sid
-
-# Steer a session
-opencode-tool run -s $sid --steer "New direction"
+# Clean up
+opencode-tool profile cleanup
 ```
-
----
-
-## For Detailed Documentation
-
-See `cli-commands.md` for:
-- Complete command syntax
-- All options and flags
-- Use cases and examples
-- Troubleshooting guide
-- Exit codes
-- Environment variables

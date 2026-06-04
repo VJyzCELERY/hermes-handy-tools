@@ -52,8 +52,31 @@ pip install -e .
 ### Prerequisites
 
 - Python 3.11+
+- tmux (for profile isolation)
 - OpenCode CLI installed (for server management)
 - OpenCode server running on `localhost:4096` (or set `OPENCODE_SERVER_URL`)
+
+### Install tmux
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install tmux
+```
+
+**macOS:**
+```bash
+brew install tmux
+```
+
+**Arch Linux:**
+```bash
+sudo pacman -S tmux
+```
+
+**Verify tmux is installed:**
+```bash
+tmux -V
+```
 
 ### Install
 
