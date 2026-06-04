@@ -370,6 +370,12 @@ def profile_create(
         url=url,
     )
 
+    if env_data is None:
+        existing = find_profile_by_url(url or f"http://localhost:{port}")
+        console.print(f"[yellow]URL {url} already used by profile: {existing}[/yellow]")
+        console.print(f"  Use: opencode-tool profile set {existing}")
+        raise SystemExit(1)
+
     if json_out:
         print(json.dumps(env_data, indent=2))
     else:
