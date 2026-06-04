@@ -101,8 +101,8 @@ def _start_server_background(port: int, directory: Optional[str] = None) -> Opti
         "--hostname", "127.0.0.1",
     ]
 
-    if directory:
-        cmd.extend(["--directory", directory])
+    # Use cwd instead of --directory (opencode serve has no --directory flag)
+    start_cwd = directory if directory else None
 
     # Start in background
     proc = subprocess.Popen(
@@ -110,6 +110,7 @@ def _start_server_background(port: int, directory: Optional[str] = None) -> Opti
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
+        cwd=start_cwd,
     )
 
     return proc.pid
