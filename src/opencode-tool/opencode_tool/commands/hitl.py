@@ -53,6 +53,16 @@ def _detect_rest(api: OpenCodeAPI, session_id: str) -> Tuple[Optional[dict], Opt
         from ..commands.session import _get_session_info
         info = _get_session_info(api, session_id)
         if info and (info.get("permissions") or info.get("question_blocked")):
+            # Check if this is a subagent and include parent ID
+            try:
+                session_info = api.get_session(session_id)
+                parent_id = session_info.get("parentID")
+                if parent_id:
+                    info["parent_session_id"] = parent_id
+                    info["blocked_session_id"] = session_id
+                    info["blocked_session_title"] = f"subagent of {parent_id}"
+            except Exception:
+                pass
             return info, "rest-api"
     except Exception:
         pass
@@ -177,6 +187,7 @@ def _detect_subagent_hitl_from_session(api: OpenCodeAPI, session_id: str) -> Tup
                                 "running_tools": [],
                                 "blocked_session_id": subagent_sid,
                                 "blocked_session_title": f"subagent of {session_id}",
+                                "parent_session_id": session_id,
                             }
                             return result, "subagent-scan"
                 break
@@ -196,6 +207,7 @@ def _detect_subagent_hitl_from_session(api: OpenCodeAPI, session_id: str) -> Tup
                         "running_tools": [],
                         "blocked_session_id": subagent_sid,
                         "blocked_session_title": f"subagent of {session_id}",
+                        "parent_session_id": session_id,
                     }
                     return result, "subagent-scan"
             except Exception:
@@ -203,6 +215,53 @@ def _detect_subagent_hitl_from_session(api: OpenCodeAPI, session_id: str) -> Tup
 
         except Exception:
             continue
+
+    return None, None
+
+
+def _detect_if_subagent(api: OpenCodeAPI, session_id: str) -> Tuple[Optional[dict], Optional[str]]:
+    """Check if a session is a subagent and detect its HITL.
+
+    Uses the session's parentID field to find the parent session.
+    If the session has HITL, returns it with the parent session ID.
+    """
+    # Get session info to check for parentID
+    try:
+        session_info = api.get_session(session_id)
+        parent_id = session_info.get("parentID")
+    except Exception:
+        parent_id = None
+
+    # Check if this session has HITL directly
+    try:
+        messages = api.get_session_messages(session_id)
+        if messages:
+            for msg in reversed(messages):
+                msg_info = msg.get("info", {})
+                if msg_info.get("role") != "assistant":
+                    continue
+                parts = msg.get("parts", [])
+                for part in parts:
+                    if part.get("type") == "tool" and part.get("tool") == "question":
+                        state = part.get("state", {})
+                        if state.get("status") in ("pending", "running", None):
+                            # Found blocked subagent
+                            result = {
+                                "session_id": session_id,
+                                "status": "busy",
+                                "detail": {"type": "busy", "reason": "subagent_question_blocked"},
+                                "permissions": [],
+                                "question_blocked": True,
+                                "question_data": part,
+                                "running_tools": [],
+                                "blocked_session_id": session_id,
+                                "blocked_session_title": f"subagent of {parent_id}" if parent_id else "subagent",
+                                "parent_session_id": parent_id,
+                            }
+                            return result, "subagent-scan"
+                break
+    except Exception:
+        pass
 
     return None, None
 
@@ -277,6 +336,7 @@ def _detect_subagent_hitl(api: OpenCodeAPI, exclude_session: Optional[str] = Non
                                         "running_tools": [],
                                         "blocked_session_id": subagent_sid,
                                         "blocked_session_title": f"subagent of {sid}",
+                                        "parent_session_id": sid,
                                     }
                                     return result, "subagent-scan"
                         break
@@ -296,6 +356,7 @@ def _detect_subagent_hitl(api: OpenCodeAPI, exclude_session: Optional[str] = Non
                                 "running_tools": [],
                                 "blocked_session_id": subagent_sid,
                                 "blocked_session_title": f"subagent of {sid}",
+                                "parent_session_id": sid,
                             }
                             return result, "subagent-scan"
                     except Exception:
@@ -338,6 +399,11 @@ def _detect_all(
     # Layer 3: All-sessions scan (catches subagent HITL)
     if check_all_sessions:
         result, source = _detect_all_sessions(api, exclude_session=session_id)
+        if result:
+            return result, source
+
+        # Also check if the target session itself is a subagent
+        result, source = _detect_if_subagent(api, session_id)
         if result:
             return result, source
 
@@ -420,6 +486,53 @@ def _respond_via_tmux(answer: str, hitl_type: str) -> bool:
         elif hitl_type == "permission":
             return tmux_respond_permission(tmux_session, answer)
         return False
+    except Exception:
+        return False
+
+
+def _find_parent_session(api: OpenCodeAPI, subagent_session_id: str) -> Optional[str]:
+    """Find the parent session ID for a subagent.
+
+    Scans all sessions for task tools that reference this subagent.
+    Returns the parent session ID or None.
+    """
+    try:
+        sessions = api.get_sessions()
+        for s in sessions:
+            sid = s.get("id")
+            if not sid:
+                continue
+            try:
+                messages = api.get_session_messages(sid)
+            except Exception:
+                continue
+            for msg in messages:
+                info = msg.get("info", {})
+                if info.get("role") != "assistant":
+                    continue
+                parts = msg.get("parts", [])
+                for part in parts:
+                    if part.get("type") != "tool" or part.get("tool") != "task":
+                        continue
+                    state = part.get("state", {})
+                    metadata = state.get("metadata", {})
+                    if metadata.get("sessionId") == subagent_session_id:
+                        return sid
+    except Exception:
+        pass
+    return None
+
+
+def _respond_via_parent(api: OpenCodeAPI, parent_session_id: str, answer: str, directory: Optional[str] = None) -> bool:
+    """Respond to a subagent's HITL by sending the answer through the parent session.
+
+    The parent session can provide the answer that the subagent needs.
+    """
+    try:
+        # Send the answer as a message to the parent session
+        prompt = f"The answer to the subagent's question is: {answer}"
+        api.send_message_async(parent_session_id, prompt, directory=directory)
+        return True
     except Exception:
         return False
 
@@ -594,8 +707,23 @@ def respond(session_id: str, answer: str, json_out: bool):
             console.print("[red]Failed to respond to permission[/red]")
 
     elif hitl_type == "question":
+        # Check if this is a subagent session (has parent_session_id)
+        parent_session_id = result.get("parent_session_id") if result else None
+        is_subagent = parent_session_id is not None
+
         responded = _respond_question_rest(api, actual_session_id, answer)
         source = "rest-api" if responded else None
+
+        if not responded and is_subagent and parent_session_id:
+            # Subagent question — route through parent session
+            directory = None
+            try:
+                session_info = api.get_session(parent_session_id)
+                directory = session_info.get("directory")
+            except Exception:
+                pass
+            responded = _respond_via_parent(api, parent_session_id, answer, directory)
+            source = "parent-session" if responded else None
 
         if not responded:
             # TUI fallback: interrupt to clear the block
@@ -612,13 +740,17 @@ def respond(session_id: str, answer: str, json_out: bool):
         if json_out:
             print(json.dumps({
                 "session_id": actual_session_id,
+                "parent_session_id": parent_session_id,
                 "type": "question",
                 "responded": responded,
                 "answer": answer,
                 "source": source,
             }))
         elif responded:
-            if source == "tui":
+            if source == "parent-session":
+                console.print(f"[green]Replied via parent session: {answer}[/green]")
+                console.print(f"  Parent: [cyan]{parent_session_id}[/cyan]")
+            elif source == "tui":
                 console.print(f"[yellow]Question not replyable via API — interrupted via TUI[/yellow]")
             elif source == "tmux":
                 console.print(f"[green]Replied via tmux: {answer}[/green]")
