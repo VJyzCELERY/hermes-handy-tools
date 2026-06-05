@@ -351,7 +351,14 @@ opencode-tool hitl respond <sid> "yes" --json
 **Response layers:**
 1. REST API reply (fast)
 2. TUI execute-command (fallback)
-3. Tmux keystrokes (last resort)
+3. Tmux keystrokes (last resort — sends keys to OpenCode TUI via tmux)
+
+**Tmux fallback details:**
+- Only triggers when layers 1 and 2 both fail
+- Finds tmux session for current profile via `find_profile_tmux_session()`
+- For questions: types answer + Enter via `tmux send-keys`
+- For permissions: maps `once`→`y`, `always`→`a`, `reject`→`n`
+- Best-effort — TUI must be in the right state to receive input
 
 ### hitl dismiss
 

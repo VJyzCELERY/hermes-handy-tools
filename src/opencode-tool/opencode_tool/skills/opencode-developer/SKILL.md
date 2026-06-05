@@ -121,9 +121,9 @@ Without `--dir`, the session uses the server's working directory, which may be w
 4. **Use `-s` to continue** — `opencode-tool run -s <session_id> "continue"`
 5. **Add HITL prevention to EVERY prompt** — Prevents `ask`/`question` tool from blocking sessions:
    ```
-   — If you have questions, answer them inline in your response. Do NOT use the ask or question tool.
+   — If you have questions, answer them inline in your response. Do NOT use the ask or question tool. Also instruct any subagents you spawn to not use the ask or question tool and to proceed with default values.
    ```
-   Example: `opencode-tool run --dir "$(pwd)" "run @.agents/commands/review-report.md <prompt> — If you have questions, answer them inline in your response. Do NOT use the ask or question tool."`
+   Example: `opencode-tool run --dir "$(pwd)" "run @.agents/commands/review-report.md <prompt> — If you have questions, answer them inline in your response. Do NOT use the ask or question tool. Also instruct any subagents you spawn to not use the ask or question tool and to proceed with default values."`
 
 ### When Monitoring
 
@@ -159,6 +159,14 @@ Without `--dir`, the session uses the server's working directory, which may be w
 1. REST API reply (fast) — direct API response
 2. TUI execute-command (fallback) — interrupt to clear block
 3. Tmux keystrokes (last resort) — sends keys to OpenCode TUI
+
+**Tmux HITL Fallback (layer 3):**
+When REST API fails (question not registered in API) and TUI interrupt doesn't help, the tool falls back to sending keystrokes directly to the OpenCode TUI via tmux:
+- Finds the tmux session for the current profile
+- For questions: types the answer text + Enter
+- For permissions: maps `once`→`y`, `always`→`a`, `reject`→`n`
+- This is best-effort — TUI must be in the right state to receive input
+- Only triggers when layers 1 and 2 both fail
 
 **⚠️ CRITICAL: Questions from `ask` tool are NOT registered in API**
 
@@ -400,3 +408,32 @@ opencode-tool cleaner start       # Start daemon
 7. **Wrong working directory** — Always verify with `pwd` and `git branch --show-current`
 8. **Forgetting HITL prevention** — Add suffix to prompts to prevent `ask` tool blocking
 9. **Not checking subagent HITL** — Use `--all-sessions` flag or monitor catches it automatically
+
+## Pitfalls
+
+### Question tool "running" status ≠ blocked
+
+**The bug:** Treating `"running"` status on a question tool call as HITL blocked causes false positives. A subagent session with `"running"` status is actively processing the question — it's NOT waiting for user input.
+
+**The fix:** Only `"pending"` and `None` statuses mean HITL blocked. `"running"` means the agent is handling it.
+
+```python
+# WRONG — causes false positive detection on subagent sessions
+if state.get("status") in ("pending", "running", None):
+
+# CORRECT — only "pending" means waiting for user input
+if state.get("status") in ("pending", None):
+```
+
+**Where this applies:**
+- `session.py:_check_question_blocked()`
+- `question.py:_scan_session_questions()`
+- Any code that scans messages for question tool calls
+
+**Root cause:** OpenCode question tool statuses:
+- `"pending"` = waiting for user input (BLOCKED)
+- `"running"` = agent is processing (NOT blocked)
+- `"completed"` = done
+- `None` = not yet started (BLOCKED)
+
+See `references/opencode-hitl-statuses.md` for full status reference and API endpoint details.
