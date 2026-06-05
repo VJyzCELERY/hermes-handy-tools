@@ -77,6 +77,9 @@ def _detect_all_sessions(api: OpenCodeAPI, exclude_session: Optional[str] = None
     Catches HITL from subagents — when a subagent spawns and gets blocked,
     the parent session may not show it, but the subagent's session will.
 
+    Also scans parent sessions for running `task` tools and checks their
+    subagent sessions directly (subagent sessions aren't in get_sessions()).
+
     Returns the first blocked session found (with session_id in the result).
     """
     try:
@@ -97,6 +100,210 @@ def _detect_all_sessions(api: OpenCodeAPI, exclude_session: Optional[str] = None
                     return result, "all-sessions-scan"
             except Exception:
                 continue
+
+        # Also check for subagent sessions (not in get_sessions list)
+        # Scan parent sessions for running task tools with subagent session IDs
+        subagent_result, subagent_source = _detect_subagent_hitl(api, exclude_session)
+        if subagent_result:
+            return subagent_result, subagent_source
+
+        # Also try querying the excluded session directly for subagent HITL
+        # (it might not be in get_sessions() due to project filtering)
+        if exclude_session:
+            subagent_result, subagent_source = _detect_subagent_hitl_from_session(api, exclude_session)
+            if subagent_result:
+                return subagent_result, subagent_source
+
+    except Exception:
+        pass
+    return None, None
+
+
+def _detect_subagent_hitl_from_session(api: OpenCodeAPI, session_id: str) -> Tuple[Optional[dict], Optional[str]]:
+    """Detect HITL in subagent sessions of a specific parent session.
+
+    This handles the case where the parent session isn't in get_sessions()
+    due to project/directory filtering, but we know its ID.
+    """
+    try:
+        messages = api.get_session_messages(session_id)
+    except Exception:
+        return None, None
+
+    if not messages:
+        return None, None
+
+    # Scan messages for task tools with subagent session IDs
+    subagent_ids = set()
+    for msg in messages:
+        info = msg.get("info", {})
+        if info.get("role") != "assistant":
+            continue
+        parts = msg.get("parts", [])
+        for part in parts:
+            if part.get("type") != "tool" or part.get("tool") != "task":
+                continue
+            state = part.get("state", {})
+            metadata = state.get("metadata", {})
+            subagent_sid = metadata.get("sessionId")
+            if subagent_sid:
+                subagent_ids.add(subagent_sid)
+
+    # Check each subagent session for HITL
+    for subagent_sid in subagent_ids:
+        try:
+            sub_messages = api.get_session_messages(subagent_sid)
+            if not sub_messages:
+                continue
+
+            # Check for pending questions
+            for msg in reversed(sub_messages):
+                msg_info = msg.get("info", {})
+                if msg_info.get("role") != "assistant":
+                    continue
+                parts = msg.get("parts", [])
+                for part in parts:
+                    if part.get("type") == "tool" and part.get("tool") == "question":
+                        state = part.get("state", {})
+                        # For question tools: "pending" or "running" = waiting for user input
+                        if state.get("status") in ("pending", "running", None):
+                            result = {
+                                "session_id": subagent_sid,
+                                "status": "busy",
+                                "detail": {"type": "busy", "reason": "subagent_question_blocked"},
+                                "permissions": [],
+                                "question_blocked": True,
+                                "question_data": part,
+                                "running_tools": [],
+                                "blocked_session_id": subagent_sid,
+                                "blocked_session_title": f"subagent of {session_id}",
+                            }
+                            return result, "subagent-scan"
+                break
+
+            # Check for pending permissions
+            try:
+                permissions = api.get_permissions()
+                subagent_perms = [p for p in permissions if p.get("sessionID") == subagent_sid]
+                if subagent_perms:
+                    result = {
+                        "session_id": subagent_sid,
+                        "status": "busy",
+                        "detail": {"type": "busy", "reason": "subagent_permission_blocked"},
+                        "permissions": subagent_perms,
+                        "question_blocked": False,
+                        "question_data": None,
+                        "running_tools": [],
+                        "blocked_session_id": subagent_sid,
+                        "blocked_session_title": f"subagent of {session_id}",
+                    }
+                    return result, "subagent-scan"
+            except Exception:
+                pass
+
+        except Exception:
+            continue
+
+    return None, None
+
+
+def _detect_subagent_hitl(api: OpenCodeAPI, exclude_session: Optional[str] = None) -> Tuple[Optional[dict], Optional[str]]:
+    """Detect HITL in subagent sessions.
+
+    Subagent sessions aren't in get_sessions() list, but their IDs are
+    embedded in parent session's `task` tool metadata. This function:
+    1. Scans ALL sessions for task tools with subagent session IDs
+    2. Queries each subagent session directly for HITL
+
+    Note: We do NOT exclude the parent session here — we need to scan it
+    to find subagent IDs. The exclude_session is only used to skip checking
+    subagent sessions as parents (they won't have task tools anyway).
+    """
+    try:
+        sessions = api.get_sessions()
+        for s in sessions:
+            sid = s.get("id")
+            if not sid:
+                continue
+
+            try:
+                messages = api.get_session_messages(sid)
+            except Exception:
+                continue
+
+            # Scan messages for task tools with subagent session IDs
+            subagent_ids = set()
+            for msg in messages:
+                info = msg.get("info", {})
+                if info.get("role") != "assistant":
+                    continue
+                parts = msg.get("parts", [])
+                for part in parts:
+                    if part.get("type") != "tool" or part.get("tool") != "task":
+                        continue
+                    state = part.get("state", {})
+                    metadata = state.get("metadata", {})
+                    subagent_sid = metadata.get("sessionId")
+                    if subagent_sid:
+                        subagent_ids.add(subagent_sid)
+
+            # Check each subagent session for HITL
+            for subagent_sid in subagent_ids:
+                try:
+                    # Query subagent session messages directly
+                    sub_messages = api.get_session_messages(subagent_sid)
+                    if not sub_messages:
+                        continue
+
+                    # Check for pending questions
+                    for msg in reversed(sub_messages):
+                        msg_info = msg.get("info", {})
+                        if msg_info.get("role") != "assistant":
+                            continue
+                        parts = msg.get("parts", [])
+                        for part in parts:
+                            if part.get("type") == "tool" and part.get("tool") == "question":
+                                state = part.get("state", {})
+                                # For question tools: "pending" or "running" = waiting for user input
+                                if state.get("status") in ("pending", "running", None):
+                                    # Found blocked subagent!
+                                    result = {
+                                        "session_id": subagent_sid,
+                                        "status": "busy",
+                                        "detail": {"type": "busy", "reason": "subagent_question_blocked"},
+                                        "permissions": [],
+                                        "question_blocked": True,
+                                        "question_data": part,
+                                        "running_tools": [],
+                                        "blocked_session_id": subagent_sid,
+                                        "blocked_session_title": f"subagent of {sid}",
+                                    }
+                                    return result, "subagent-scan"
+                        break
+
+                    # Check for pending permissions
+                    try:
+                        permissions = api.get_permissions()
+                        subagent_perms = [p for p in permissions if p.get("sessionID") == subagent_sid]
+                        if subagent_perms:
+                            result = {
+                                "session_id": subagent_sid,
+                                "status": "busy",
+                                "detail": {"type": "busy", "reason": "subagent_permission_blocked"},
+                                "permissions": subagent_perms,
+                                "question_blocked": False,
+                                "question_data": None,
+                                "running_tools": [],
+                                "blocked_session_id": subagent_sid,
+                                "blocked_session_title": f"subagent of {sid}",
+                            }
+                            return result, "subagent-scan"
+                    except Exception:
+                        pass
+
+                except Exception:
+                    continue
+
     except Exception:
         pass
     return None, None
