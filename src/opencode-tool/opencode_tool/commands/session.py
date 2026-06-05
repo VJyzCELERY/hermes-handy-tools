@@ -467,7 +467,7 @@ def _check_question_blocked(api: OpenCodeAPI, session_id: str):
         for part in parts:
             if part.get("type") == "tool" and part.get("tool") == "question":
                 state = part.get("state", {})
-                if state.get("status") in ("pending", "running", None):
+                if state.get("status") in ("pending", None):
                     return part
         break
     

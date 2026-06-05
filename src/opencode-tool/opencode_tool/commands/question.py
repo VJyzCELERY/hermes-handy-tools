@@ -42,7 +42,7 @@ def _scan_session_questions(api: OpenCodeAPI, session_id: str):
         for part in parts:
             if part.get("type") == "tool" and part.get("tool") == "question":
                 state = part.get("state", {})
-                if state.get("status") in ("pending", "running", None):
+                if state.get("status") in ("pending", None):
                     input_data = state.get("input", {})
                     questions_list = input_data.get("questions", [])
                     if questions_list:
