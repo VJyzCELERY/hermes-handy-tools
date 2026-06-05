@@ -1,6 +1,7 @@
 """Background cleaner for opencode-tool profiles.
 
-Runs as a daemon, periodically cleaning orphaned profiles and zombie servers.
+Runs as a daemon, periodically cleaning zombie servers.
+Simplified: only cleans servers, not profiles.
 
 Usage:
     opencode-tool cleaner start       # start in background
@@ -26,11 +27,6 @@ from ..registry import (
     save_registry,
     is_pid_alive,
     cleanup_stale_entries,
-    list_profiles,
-    load_profile_env,
-    get_servers_by_profile,
-    delete_profile_dir,
-    profile_exists,
 )
 
 # Stale threshold: 10 minutes without use
@@ -73,7 +69,6 @@ def _parse_timestamp(ts_str: str) -> float:
     except (ValueError, TypeError):
         return 0
 
-
 console = Console()
 
 CLEANER_PID_FILE = OPENTOOL_DIR / "cleaner.pid"
@@ -93,10 +88,12 @@ def _log(message: str):
 
 
 def _clean_once() -> dict:
-    """Run one cleanup cycle. Returns stats."""
-    stats = {"servers_killed": 0, "profiles_deleted": 0, "registry_cleaned": 0}
+    """Run one cleanup cycle. Returns stats.
+
+    Only cleans zombie servers — does NOT delete profiles.
+    """
+    stats = {"servers_killed": 0, "registry_cleaned": 0}
     registry = load_registry()
-    profiles = list_profiles()
     now = time.time()
 
     # Check servers in registry
@@ -104,19 +101,17 @@ def _clean_once() -> dict:
     for server in registry.get("servers", []):
         server_id = server.get("id")
         pid = server.get("pid")
-        shell_pid = server.get("shell_pid")
         status = server.get("status")
         tmux_session = server.get("tmux_session")
         last_used_at = server.get("last_used_at", "")
 
         server_alive = pid and is_pid_alive(pid)
-        shell_alive = shell_pid and is_pid_alive(shell_pid)
 
         # Check tmux session if applicable
         tmux_alive = False
         if tmux_session:
             tmux_alive = _is_tmux_session_alive(tmux_session)
-        
+
         # Check staleness (last used > 10 minutes ago)
         last_used_ts = _parse_timestamp(last_used_at)
         stale = (now - last_used_ts) > STALE_THRESHOLD_SECONDS if last_used_ts > 0 else False
@@ -130,9 +125,6 @@ def _clean_once() -> dict:
         elif status == "running" and tmux_session and not tmux_alive:
             is_orphan = True
             reason = "tmux session dead"
-        elif status == "running" and not tmux_session and not shell_alive:
-            is_orphan = True
-            reason = "shell dead (no tmux)"
         elif status == "running" and stale:
             is_orphan = True
             reason = f"stale ({int(now - last_used_ts)}s since last use)"
@@ -159,46 +151,6 @@ def _clean_once() -> dict:
         ]
         save_registry(registry)
         stats["registry_cleaned"] = len(servers_to_remove)
-
-    # Check profiles for orphans
-    for profile_name in profiles:
-        # Skip protected profiles
-        env_data = load_profile_env(profile_name)
-        if env_data.get("protected") or profile_name == "default":
-            continue
-
-        profile_servers = get_servers_by_profile(profile_name)
-        has_running = any(s.get("status") == "running" for s in profile_servers)
-
-        if not has_running:
-            # Check if any server has a tmux session
-            tmux_session = None
-            for s in profile_servers:
-                tmux_session = s.get("tmux_session")
-                if tmux_session:
-                    break
-            
-            if tmux_session:
-                # Check if tmux session is alive
-                tmux_alive = _is_tmux_session_alive(tmux_session)
-                if not tmux_alive:
-                    _log(f"Orphan profile: {profile_name} (no server, tmux dead)")
-                    delete_profile_dir(profile_name)
-                    stats["profiles_deleted"] += 1
-            else:
-                # Legacy: check shell PID
-                shell_pid = None
-                for s in profile_servers:
-                    shell_pid = s.get("shell_pid")
-                    if shell_pid:
-                        break
-
-                shell_alive = shell_pid and is_pid_alive(shell_pid)
-
-                if not shell_alive:
-                    _log(f"Orphan profile: {profile_name} (no server, shell dead)")
-                    delete_profile_dir(profile_name)
-                    stats["profiles_deleted"] += 1
 
     # Cleanup stale registry entries
     cleanup_stale_entries()
@@ -257,7 +209,7 @@ def _daemon_loop(interval: int):
 def cleaner():
     """Background profile cleaner.
 
-    Automatically cleans orphaned profiles and zombie servers.
+    Automatically cleans zombie servers.
     """
     pass
 
@@ -328,7 +280,6 @@ def run_once():
     if any(v > 0 for v in stats.values()):
         console.print(f"[green]Cleaned:[/green]")
         console.print(f"  Servers killed:    {stats['servers_killed']}")
-        console.print(f"  Profiles deleted:  {stats['profiles_deleted']}")
         console.print(f"  Registry cleaned:  {stats['registry_cleaned']}")
     else:
         console.print("[green]Nothing to clean[/green]")

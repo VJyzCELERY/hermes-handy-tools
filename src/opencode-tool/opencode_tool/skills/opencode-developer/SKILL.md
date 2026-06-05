@@ -1,13 +1,13 @@
 ---
 name: opencode-developer
 description: "Primary skill for all OpenCode interactions — CLI-first, API-based HITL, session tracking."
-version: 5.2.0
+version: 6.0.0
 author: hermes
 platforms: [linux, macos, wsl]
 metadata:
   hermes:
     tags: [opencode, development, coding-agent, cli, hitl, session-tracking]
-    related_skills: [opencode-tool, opencode-tool-commands]
+    related_skills: [opencode-tool-cmd, opencode-tool-quick-ref]
 ---
 
 # OpenCode Developer Workflow
@@ -36,11 +36,11 @@ metadata:
 
 | ❌ FORBIDDEN | ✅ REQUIRED |
 |-------------|------------|
-| `curl http://localhost:4096/session` | `opencode-tool session list` |
-| `curl -X POST http://localhost:4096/session` | `opencode-tool run "task"` |
-| `curl http://localhost:4096/permission` | `opencode-tool permission list --all` |
-| `curl http://localhost:4096/question` | `opencode-tool question get <sid>` |
-| Any `curl` to `localhost:4096` | Corresponding `opencode-tool` command |
+| `curl http://localhost:4905/session` | `opencode-tool session list` |
+| `curl -X POST http://localhost:4905/session` | `opencode-tool run "task"` |
+| `curl http://localhost:4905/permission` | `opencode-tool permission list --all` |
+| `curl http://localhost:4905/question` | `opencode-tool question get <sid>` |
+| Any `curl` to `localhost:4905` | Corresponding `opencode-tool` command |
 
 ## Server Detection & Startup
 
@@ -68,45 +68,32 @@ opencode-tool server serve
 
 ### Rule 4: ALWAYS Use `--dir` for Worktree Tasks
 
+**⚠️ CRITICAL: Profile Environment Variables Required**
+
+`opencode-tool run` does NOT automatically use the active profile set via `opencode-tool profile set`. You MUST export these environment variables before EVERY opencode-tool command:
+
+```bash
+export OPENCODE_SERVER_URL="<profile_url>"
+export OPENCODE_SERVER_MODE="isolated"
+export OPENCODE_TOOL_PROFILE="<profile_name>"
+opencode-tool run ...
+```
+
+Without this, opencode-tool creates ephemeral profiles and the session runs on the wrong server.
+
+**How to get the profile variables:**
+```bash
+opencode-tool profile set <profile_name>
+# This prints the export commands — copy and use them
+```
+
 **Profile Isolation with Tmux:**
 
 opencode-tool uses tmux for profile isolation when available. This ensures:
-
 - Each profile gets its own tmux session
 - Shell persists across `terminal()` calls
 - Cleaner can detect active profiles safely
 - Multiple sessions can run concurrently
-
-**Check if tmux is installed:**
-
-```bash
-tmux -V
-```
-
-**Install tmux if not available:**
-
-```bash
-sudo apt-get install tmux  # Ubuntu/Debian
-brew install tmux          # macOS
-sudo pacman -S tmux        # Arch Linux
-```
-
-**How it works:**
-
-1. First `opencode-tool run` creates tmux session: `opencode-{name}`
-2. Server starts inside tmux: `opencode serve --port {port}`
-3. Env vars set: `OPENCODE_SERVER_URL`, `OPENCODE_TOOL_PROFILE`
-4. Subsequent calls reuse the same profile via env vars
-5. Tmux session stays alive until:
-   - Profile terminated: `opencode-tool profile terminate <name>`
-   - Cleaner detects staleness: `last_used_at` > 10 minutes
-   - Tmux session killed externally
-
-**Benefits:**
-
-- Shell PID persists across `terminal()` calls (it's the tmux shell)
-- Cleaner won't kill active servers mid-generation
-- Multiple Hermes sessions can run concurrently
 
 When running tasks in a specific directory:
 
@@ -115,38 +102,6 @@ opencode-tool run --dir "$(pwd)" "task"
 ```
 
 Without `--dir`, the session uses the server's working directory, which may be wrong.
-
----
-
-## Related Skills
-
-| Skill | Purpose |
-|-------|---------|
-| `opencode-tool` | Quick reference for all CLI commands |
-| `opencode-tool-commands` | Detailed CLI documentation with use cases |
-
-```
-┌──────────────────────────────────────────────────┐
-│  opencode web --port 4096 (server daemon)         │
-│  • Persistent background process                  │
-│  • Processes sessions autonomously                │
-│  • REST API for all interactions                  │
-└──────────────┬───────────────────────────────────┘
-               │
-    ┌──────────┴──────────┐
-    ▼                     ▼
-┌─────────┐        ┌──────────┐
-│ CLI     │        │ API      │
-│ run +   │        │ HITL     │
-│ monitor │        │ resolve  │
-└────┬────┘        └────┬─────┘
-     │                  │
-     ▼                  ▼
-opencode-tool    opencode-tool
-  run/session       permission/question
-```
-
-**Server URL:** `http://localhost:4096` (env: `OPENCODE_SERVER_URL`)
 
 ---
 
@@ -164,15 +119,26 @@ opencode-tool    opencode-tool
 2. **Include `--dir "$(pwd)"`** — Always specify working directory for worktree tasks
 3. **Use `-m` and `-v` for model** — `opencode-tool run -m <provider>,<model> -v <variant> "task"`
 4. **Use `-s` to continue** — `opencode-tool run -s <session_id> "continue"`
+5. **Add HITL prevention to EVERY prompt** — Prevents `ask`/`question` tool from blocking sessions:
+   ```
+   — If you have questions, answer them inline in your response. Do NOT use the ask or question tool.
+   ```
+   Example: `opencode-tool run --dir "$(pwd)" "run @.agents/commands/review-report.md <prompt> — If you have questions, answer them inline in your response. Do NOT use the ask or question tool."`
 
 ### When Monitoring
 
 1. **Use `opencode-tool session status --monitor`** — Runs until blocked or idle
 2. **Only prints on status change** — Silent if status stays the same (busy → busy)
-3. **Check for permissions** — `opencode-tool permission list <session_id>`
-4. **Check for questions** — `opencode-tool question get <session_id>`
-5. **Never poll manually** — Use the monitor flag or wait script
-6. **Retry auto-timeout** — If status is retry for configurable timeout (default 60s), monitor terminates on next interval check
+3. **ALWAYS run monitoring as a background task** — Never poll with sleep loops:
+   ```bash
+   terminal(command="opencode-tool session status <sid> --monitor", background=true, notify_on_complete=true)
+   ```
+   This avoids context bloat (one notification when done) and prevents token waste from repeated polling.
+4. **Check for permissions** — `opencode-tool permission list <session_id>`
+5. **Check for questions** — `opencode-tool question get <session_id>`
+6. **Never poll manually** — Use the monitor flag with background+notify_on_complete
+7. **Retry auto-timeout** — If status is retry for configurable timeout (default 60s), monitor terminates on next interval check
+8. **Detects subagent HITL** — Monitor now checks ALL sessions for blocked state, catching HITL from spawned subagents
 
 ### When Blocked (HITL)
 
@@ -182,6 +148,30 @@ opencode-tool    opencode-tool
 4. **Dismiss (stop agent)** — `opencode-tool hitl dismiss <session_id>`
 5. **Never ignore HITL** — Always resolve before continuing
 6. **Legacy commands still work** — `permission grant`, `question reply` for precision control
+
+**HITL Detection Layers (tried in order):**
+1. REST API (fast) — checks permissions and questions endpoints
+2. Message scanning (moderate) — scans session messages for pending questions
+3. All-sessions scan — checks ALL active sessions for blocked state (catches subagent HITL)
+4. TUI control/next (with `--wait`) — blocks until HITL found
+
+**HITL Response Layers (tried in order):**
+1. REST API reply (fast) — direct API response
+2. TUI execute-command (fallback) — interrupt to clear block
+3. Tmux keystrokes (last resort) — sends keys to OpenCode TUI
+
+**⚠️ CRITICAL: Questions from `ask` tool are NOT registered in API**
+
+Some OpenCode commands (like review-loop.md orchestrator) use the `ask` tool for HITL questions. These questions:
+- Show up in `opencode-tool question get` but say "question not registered in API"
+- `opencode-tool question reply` fails with 400 error
+- `opencode-tool question dismiss` KILLS the session entirely
+- There is NO way to answer them via API
+
+**Workaround:** Add HITL prevention suffix to prompts:
+```
+— If you have questions, answer them inline in your response. Do NOT use the ask or question tool.
+```
 
 ### When Steering
 
@@ -258,44 +248,41 @@ opencode-tool run -s ses_abc123 --steer "New direction"
 # One-time check
 opencode-tool session status <session_id>
 
-# Monitor until blocked/idle
+# Monitor until blocked/idle (run as background task)
 opencode-tool session status <session_id> --monitor
 ```
 
 ### Step 4: Handle HITL (if blocked)
 
-#### Permission Blocked
-
 ```bash
-# List pending permissions
-opencode-tool permission list <session_id>
+# Detect what's pending
+opencode-tool hitl detect <session_id>
 
-# Grant permission
-opencode-tool permission grant <session_id> once
-opencode-tool permission grant <session_id> always
-opencode-tool permission grant <session_id> reject
+# Respond
+opencode-tool hitl respond <session_id> "yes"      # answer question
+opencode-tool hitl respond <session_id> once        # grant permission
+opencode-tool hitl respond <session_id> reject      # reject
+
+# Or dismiss (stop agent)
+opencode-tool hitl dismiss <session_id>
 ```
 
-#### Question Blocked
+### Step 5: Delete dirty sessions (if needed)
 
 ```bash
-# Get pending questions
-opencode-tool question get <session_id>
-
-# Reply to question
-opencode-tool question reply <request_id> "Option A"
-
-# Reject question
-opencode-tool question reject <request_id>
-
-# Dismiss stuck question (aborts session)
-opencode-tool question dismiss <session_id>
+# Delete unrecoverable sessions
+opencode-tool session delete <session_id>
+opencode-tool session delete <session_id> --force   # skip confirmation
 ```
 
-### Step 5: Interrupt (if needed)
+### Step 6: Cleanup
 
 ```bash
-opencode-tool session interrupt <session_id>
+# Clean zombie servers via cleaner daemon
+opencode-tool cleaner run-once
+
+# Or terminate specific profile
+opencode-tool profile terminate <profile_name> --force
 ```
 
 ---
@@ -317,10 +304,13 @@ opencode-tool session interrupt <session_id>
 ┌─────────────┐
 │  BLOCKED    │
 │ ┌─────────┐ │
-│ │PERMISSION│ │  → opencode-tool permission grant
+│ │PERMISSION│ │  → opencode-tool hitl respond
 │ └─────────┘ │
 │ ┌─────────┐ │
-│ │QUESTION │ │  → opencode-tool question reply
+│ │QUESTION │ │  → opencode-tool hitl respond
+│ └─────────┘ │
+│ ┌─────────┐ │
+│ │SUBAGENT │ │  → opencode-tool hitl detect (all sessions)
 │ └─────────┘ │
 └──────┬──────┘
        │
@@ -339,8 +329,9 @@ opencode-tool session interrupt <session_id>
 | `idle` | Session completed | None needed |
 | `busy` | Session processing | Wait or monitor |
 | `retry` | Retrying after failure | Wait for backoff |
-| Permission blocked | Waiting for permission | `opencode-tool permission grant` |
-| Question blocked | Waiting for answer | `opencode-tool question reply` or `dismiss` |
+| Permission blocked | Waiting for permission | `opencode-tool hitl respond` |
+| Question blocked | Waiting for answer | `opencode-tool hitl respond` or `dismiss` |
+| Subagent blocked | Subagent HITL | `opencode-tool hitl detect --all-sessions` |
 
 ---
 
@@ -355,48 +346,45 @@ opencode-tool server stop
 # Session
 opencode-tool session list
 opencode-tool session list --filter busy
-opencode-tool session list --filter active
-opencode-tool session list --filter blocked
-opencode-tool session list --filter permission-block
-opencode-tool session list --filter question-block
-opencode-tool session list --filter idle
 opencode-tool session search <query>
 opencode-tool session get <session_id>
 opencode-tool session get <session_id> --response        # Last assistant response
-opencode-tool session get <session_id> --response --hide-tools  # Response text only
-opencode-tool session messages <session_id>              # All messages
 opencode-tool session messages <session_id> --last 5    # Last 5 messages
-opencode-tool session messages <session_id> --role assistant  # Only assistant messages
-opencode-tool session messages <session_id> --hide-tools     # No tool calls
-opencode-tool session messages <session_id> --limit 10 --offset 20  # Pagination
 opencode-tool session status <session_id>
 opencode-tool session status <session_id> --monitor
 opencode-tool session interrupt <session_id>
+opencode-tool session delete <session_id>                # Delete dirty session
 
 # Run
 opencode-tool run "task"
-opencode-tool run --dir /path "task"
+opencode-tool run --dir "$(pwd)" "task"
 opencode-tool run -m <provider>,<model> -v <variant> "task"
 opencode-tool run -s <session_id> "continue"
-opencode-tool run -s <session_id> -m <provider>,<model> "switch model and continue"
-opencode-tool run -s <session_id> -v <variant> "switch variant and continue"
 opencode-tool run -s <session_id> --steer "new direction"
 
-# Permissions
+# HITL
+opencode-tool hitl detect <session_id>
+opencode-tool hitl detect <session_id> --all-sessions    # Catch subagent HITL
+opencode-tool hitl respond <session_id> "yes"
+opencode-tool hitl respond <session_id> once
+opencode-tool hitl dismiss <session_id>
+
+# Permissions (legacy)
 opencode-tool permission list <session_id>
-opencode-tool permission list --all
 opencode-tool permission grant <session_id> once|always|reject
 
-# Questions
+# Questions (legacy)
 opencode-tool question get <session_id>
 opencode-tool question reply <request_id> "Answer"
-opencode-tool question reject <request_id>
 opencode-tool question dismiss <session_id>
 
 # Config
 opencode-tool config get
 opencode-tool config set <key> <value>
-opencode-tool config path
+
+# Cleaner
+opencode-tool cleaner run-once    # Clean zombie servers
+opencode-tool cleaner start       # Start daemon
 ```
 
 ---
@@ -407,116 +395,8 @@ opencode-tool config path
 2. **Using `curl`** — Always use `opencode-tool` commands
 3. **Forgetting `--dir`** — Sessions may run in wrong directory
 4. **Ignoring HITL** — Always resolve permissions/questions before continuing
-5. **Polling manually** — Use `--monitor` flag instead
-6. **Continuing stuck sessions** — Start fresh if session is stuck
+5. **Polling manually** — Use `--monitor` flag with background+notify_on_complete
+6. **Continuing stuck sessions** — Start fresh or use `session delete` if stuck
 7. **Wrong working directory** — Always verify with `pwd` and `git branch --show-current`
-
----
-
-## Use Case Examples
-
-### Running a New Session
-```bash
-opencode-tool run --dir "$(pwd)" "Implement the auth module"
-```
-
-### Continuing a Session
-```bash
-opencode-tool run -s ses_abc123 "Continue where you left off"
-```
-
-### Changing Model Mid-Session
-```bash
-opencode-tool run -s ses_abc123 -m openai,gpt-5.5 "Switch to GPT 5.5"
-```
-
-### Changing Model Variant
-```bash
-opencode-tool run -s ses_abc123 -v high "Use high reasoning effort"
-# Retains the current model, only changes variant
-```
-
-### Changing Both Model and Variant
-```bash
-opencode-tool run -s ses_abc123 -m openai,gpt-5.5 -v high "Switch to GPT 5.5 with high reasoning"
-```
-
-### Steering to Different Model
-```bash
-# Interrupt and switch to different model
-opencode-tool run -s ses_abc123 -m openai,gpt-5.5 --steer "Focus on unit tests"
-
-# Interrupt and switch to different model + variant
-opencode-tool run -s ses_abc123 -m openai,gpt-5.5 -v high --steer "Focus on unit tests"
-
-# Interrupt and only change variant (retains model)
-opencode-tool run -s ses_abc123 -v high --steer "Focus on unit tests"
-```
-
-**Model/Variant Behavior:**
-- Only `-m` provided → keeps current variant, changes model
-- Only `-v` provided → keeps current model, changes variant
-- Both `-m` and `-v` provided → changes both
-
-### Steering Conversation
-```bash
-opencode-tool run -s ses_abc123 --steer "Focus on unit tests instead"
-```
-
-### Queuing a Message (Non-Interrupt)
-```bash
-# Queue message for after current tool call completes (does NOT interrupt)
-opencode-tool run -s ses_abc123 "After that, also add error handling"
-
-# This is different from --steer which interrupts immediately
-# Use queue when you want to add instructions without disrupting current work
-```
-
-### Monitoring a Session
-```bash
-opencode-tool session status ses_abc123 --monitor --interval 5
-```
-
-### Getting Last Response
-```bash
-# With tool calls
-opencode-tool session get ses_abc123 --response
-
-# Text only (no tool calls)
-opencode-tool session get ses_abc123 --response --hide-tools
-```
-
-### Getting Messages with Filtering
-```bash
-# Last 5 assistant messages without tool calls
-opencode-tool session messages ses_abc123 --last 5 --role assistant --hide-tools
-
-# Paginate through all messages
-opencode-tool session messages ses_abc123 --limit 10 --offset 20
-```
-
-### Replying to a Question
-```bash
-opencode-tool question get ses_abc123
-opencode-tool question reply req_abc123 "Option A"
-```
-
-### Granting Permission
-```bash
-opencode-tool permission list ses_abc123
-opencode-tool permission grant ses_abc123 once
-```
-
-### Interrupting a Session
-```bash
-opencode-tool session interrupt ses_abc123
-```
-
----
-
-## Related Skills
-
-| Skill | Purpose |
-|-------|---------|
-| `opencode-tool` | Quick reference for all CLI commands |
-| `opencode-tool-commands` | Detailed CLI documentation with use cases |
+8. **Forgetting HITL prevention** — Add suffix to prompts to prevent `ask` tool blocking
+9. **Not checking subagent HITL** — Use `--all-sessions` flag or monitor catches it automatically

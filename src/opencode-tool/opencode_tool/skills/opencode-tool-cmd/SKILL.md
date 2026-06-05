@@ -1,13 +1,13 @@
 ---
-name: opencode-tool-commands
+name: opencode-tool-cmd
 description: "Complete command reference with use cases, examples, and troubleshooting for opencode-tool."
-version: 1.0.0
+version: 2.0.0
 author: hermes
 platforms: [linux, macos, wsl]
 metadata:
   hermes:
     tags: [opencode, cli, reference, detailed, hitl, profile]
-    related_skills: [opencode-developer, opencode-tool]
+    related_skills: [opencode-developer, opencode-tool-quick-ref]
 ---
 
 # OpenCode Tool — Complete Command Reference
@@ -27,20 +27,13 @@ Set the active profile for the current shell session. Outputs shell export comma
 ```bash
 # Auto-generate random UUID name
 eval $(opencode-tool profile set)
-# Output:
-# Profile: a1b2c3d4e5f6
-# Mode:    isolated
-# URL:     http://localhost:16384
-# export OPENCODE_SERVER_URL="http://localhost:16384"
-# export OPENCODE_SERVER_MODE="isolated"
-# export OPENCODE_TOOL_PROFILE="a1b2c3d4e5f6"
 
 # Create with specific name
 eval $(opencode-tool profile set myproject)
 
 # Connect to existing server (collaborate mode)
 eval $(opencode-tool profile set --collaborate myuser)
-eval $(opencode-tool profile set --collaborate myuser --url http://localhost:4096)
+eval $(opencode-tool profile set --collaborate myuser --url http://localhost:4905)
 
 # JSON output
 eval $(opencode-tool profile set myproject --json)
@@ -65,7 +58,6 @@ Create a profile without setting shell environment. Same as `set` but no export 
 ```bash
 opencode-tool profile create myproject
 opencode-tool profile create myproject --port 12345
-opencode-tool profile create myproject --from .env
 ```
 
 ### profile list
@@ -116,27 +108,14 @@ opencode-tool profile terminate myproject --force
 
 **Use case:** When you want to fully clean up a profile including its server process.
 
-### profile cleanup
+### profile init
 
-Scan and clean orphaned profiles and zombie servers.
+Initialize default profile from config.
 
 ```bash
-# Preview what would be cleaned
-opencode-tool profile cleanup --dry-run
-
-# Actually clean
-opencode-tool profile cleanup
-
-# JSON output
-opencode-tool profile cleanup --json
+opencode-tool profile init
+opencode-tool profile init --json
 ```
-
-**Detects:**
-- Servers whose owning shell is dead
-- Profiles with no running server and dead shell
-- Stale registry entries
-
-**Use case:** Run periodically or when you notice zombie opencode processes.
 
 ---
 
@@ -156,7 +135,7 @@ Start the opencode server.
 
 ```bash
 opencode-tool server serve
-opencode-tool server serve --port 4096
+opencode-tool server serve --port 4905
 opencode-tool server serve --password mypass
 ```
 
@@ -232,6 +211,8 @@ opencode-tool session status <sid> --monitor       # watch until blocked/idle
 opencode-tool session status <sid> --monitor --interval 5
 ```
 
+**Monitor detects subagent HITL:** Checks ALL sessions for blocked state, catching HITL from spawned subagents.
+
 ### session interrupt
 
 Abort a running session.
@@ -239,6 +220,21 @@ Abort a running session.
 ```bash
 opencode-tool session interrupt <sid>
 ```
+
+### session delete
+
+Delete a session permanently. Use for truly unrecoverable sessions.
+
+```bash
+opencode-tool session delete <sid>
+opencode-tool session delete <sid> --force    # skip confirmation
+opencode-tool session delete <sid> --json
+```
+
+**Use cases:**
+- Dirty sessions that won't clean up
+- Stuck sessions that can't be interrupted
+- Cleaning up orphaned sessions
 
 ---
 
@@ -307,17 +303,21 @@ opencode-tool hitl detect <sid> --wait
 
 # With timeout
 opencode-tool hitl detect <sid> --wait --timeout 10
+
+# Check all sessions (catches subagent HITL)
+opencode-tool hitl detect <sid> --all-sessions
 ```
 
 **Detection layers (tried in order):**
 1. REST API (fast)
 2. Message scanning (moderate)
-3. TUI control/next (with `--wait`)
+3. All-sessions scan (catches subagent HITL)
+4. TUI control/next (with `--wait`)
 
 **Output example:**
 ```
 Session: ses_abc123
-Profile: myproject (isolated)
+Profile: myproject
 Source:  message-scan
 Type:    question
 
@@ -350,7 +350,8 @@ opencode-tool hitl respond <sid> "yes" --json
 
 **Response layers:**
 1. REST API reply (fast)
-2. TUI execute-command (isolated only, fallback)
+2. TUI execute-command (fallback)
+3. Tmux keystrokes (last resort)
 
 ### hitl dismiss
 
@@ -388,12 +389,42 @@ opencode-tool question dismiss <sid>
 
 ---
 
+## Cleaner Commands
+
+```bash
+# Clean zombie servers once
+opencode-tool cleaner run-once
+
+# Start daemon
+opencode-tool cleaner start
+opencode-tool cleaner start --interval 300
+
+# Stop daemon
+opencode-tool cleaner stop
+
+# Check status
+opencode-tool cleaner status
+
+# Show log
+opencode-tool cleaner log
+opencode-tool cleaner log --lines 50
+```
+
+**What it cleans:**
+- Servers whose process is dead
+- Servers with dead tmux sessions
+- Stale servers (>10 minutes since last use)
+- Stale registry entries (>24 hours)
+
+**Does NOT clean profiles** — use `profile delete` or `profile terminate` for that.
+
+---
+
 ## Skills Commands
 
 ```bash
 opencode-tool skills list
 opencode-tool skills get [name]
-opencode-tool skills export [file]
 ```
 
 ---
@@ -408,10 +439,10 @@ opencode-tool config path
 ```
 
 **Config keys:**
-- `opencode_server_url` — Default server URL
-- `monitor_retry_timeout` — Retry timeout (seconds)
-- `default_model` — Default model ID
-- `default_variant` — Default variant
+- `opencode_server_url` — Default server URL (default: http://localhost:4905)
+- `monitor_retry_timeout` — Retry timeout (seconds, default: 60)
+- `default_model` — Default model ID (default: mimo-v2.5)
+- `default_variant` — Default variant (default: high)
 
 ---
 
@@ -427,13 +458,6 @@ eval $(opencode-tool profile set myproject)
 opencode-tool run "analyze this code"
 ```
 
-### Auto: One-shot command (no profile setup)
-
-```bash
-# Auto-creates ephemeral profile
-opencode-tool run "quick question about main.py"
-```
-
 ### HITL: Handle stuck agent
 
 ```bash
@@ -445,6 +469,16 @@ opencode-tool hitl respond <sid> "yes"
 
 # Or dismiss if can't answer
 opencode-tool hitl dismiss <sid>
+```
+
+### HITL: Catch subagent HITL
+
+```bash
+# Monitor detects subagent HITL automatically
+opencode-tool session status <sid> --monitor
+
+# Or manually check all sessions
+opencode-tool hitl detect <sid> --all-sessions
 ```
 
 ### HITL: Automated HITL response
@@ -462,29 +496,23 @@ elif [ "$type" == "question" ]; then
 fi
 ```
 
-### Collaboration: Help user's session
+### HITL: Prevention (add to every prompt)
 
 ```bash
-# Connect to user's server
-eval $(opencode-tool profile set --collaborate myuser --url http://localhost:4096)
-
-# Detect HITL on user's session
-opencode-tool hitl detect <user_session_id>
-
-# Respond (REST API only — safe)
-opencode-tool hitl respond <user_session_id> once
+# Add this suffix to prevent ask/question tool blocking
+opencode-tool run --dir "$(pwd)" "your prompt here — If you have questions, answer them inline in your response. Do NOT use the ask or question tool."
 ```
 
-### Cleanup: Kill zombie servers
+### Cleanup: Delete dirty sessions
 
 ```bash
-# Preview what's orphaned
-opencode-tool profile cleanup --dry-run
+# Delete unrecoverable session
+opencode-tool session delete <sid> --force
 
-# Clean all zombies
-opencode-tool profile cleanup
+# Clean zombie servers
+opencode-tool cleaner run-once
 
-# Kill specific profile
+# Terminate specific profile
 opencode-tool profile terminate old-project --force
 ```
 
@@ -500,57 +528,28 @@ opencode-tool session status <sid> --monitor --interval 5
 
 ---
 
-## Environment Variables
-
-| Variable | Description | Set by |
-|----------|-------------|--------|
-| `OPENCODE_SERVER_URL` | Server URL | `profile set` |
-| `OPENCODE_SERVER_MODE` | `isolated` or `collaborate` | `profile set` |
-| `OPENCODE_TOOL_PROFILE` | Active profile name | `profile set` |
-| `OPENCODE_SERVER_ID` | Server registry ID | `profile set` |
-| `OPENCODE_SERVER_PASSWORD` | Auth password | manual |
-
----
-
-## Exit Codes
-
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | Error (see stderr) |
-
----
-
 ## Troubleshooting
 
-**"No active profile"**
-```bash
-eval $(opencode-tool profile set)
-```
+### "Question not registered in API"
 
-**"Port already in use"**
-```bash
-opencode-tool profile cleanup  # kill zombies first
-```
+This happens when the `ask` tool is used. The question isn't in the REST API.
 
-**"Server not running"**
-```bash
-opencode-tool server status
-opencode-tool server serve  # start it
-```
+**Solution:** Add HITL prevention suffix to prompts, or use `hitl dismiss` to stop the agent.
 
-**"HITL not responding"**
-```bash
-# Check mode
-echo $OPENCODE_SERVER_MODE
+### Session stuck in "busy" but no tools running
 
-# If collaborate, REST API only — no TUI fallback
-# Switch to isolated for full capabilities
-eval $(opencode-tool profile set myproject)
-```
+The session might be processing a long LLM call.
 
-**Zombie processes accumulating**
-```bash
-opencode-tool profile cleanup --dry-run  # preview
-opencode-tool profile cleanup             # clean
-```
+**Solution:** Wait, or check with `session status <sid>`. If stuck for >60s in retry, monitor will timeout.
+
+### Subagent HITL not detected
+
+The subagent's session is separate from the parent session.
+
+**Solution:** Use `hitl detect <sid> --all-sessions` or `session status <sid> --monitor` (which checks all sessions automatically).
+
+### Can't delete session
+
+The session might be in a dirty state.
+
+**Solution:** Use `session delete <sid> --force` to bypass confirmation. If that fails, the session may need manual cleanup via `opencode abort <sid>`.

@@ -48,7 +48,7 @@ from ..registry import (
 console = Console()
 
 # Default server URL
-DEFAULT_URL = "http://localhost:4096"
+DEFAULT_URL = "http://localhost:4905"
 
 
 def _get_active_profile() -> Optional[str]:
@@ -582,135 +582,6 @@ def profile_terminate(name: str, force: bool):
     else:
         console.print(f"  Profile deleted (server not killed — remote URL)")
 
-
-@profile.command("cleanup")
-@click.option("--dry-run", is_flag=True, help="Show what would be cleaned")
-@click.option("--json", "json_out", is_flag=True, help="Output JSON")
-def profile_cleanup(dry_run: bool, json_out: bool):
-    """Clean up orphaned profiles and zombie servers.
-    
-    Detects:
-      - Servers whose owning shell is dead (zombie servers)
-      - Profiles with no running server and dead shell
-      - Stale registry entries
-    """
-    from ..registry import cleanup_stale_entries, is_pid_alive
-
-    registry = load_registry()
-    profiles = list_profiles()
-    cleaned = {"servers_killed": 0, "profiles_deleted": 0, "registry_cleaned": 0}
-    orphans = []
-
-    # Check each server in registry
-    servers_to_remove = []
-    for server in registry.get("servers", []):
-        server_id = server.get("id")
-        pid = server.get("pid")
-        shell_pid = server.get("shell_pid")
-        profile = server.get("profile")
-        status = server.get("status")
-
-        # Check if server process is alive
-        server_alive = pid and is_pid_alive(pid)
-        # Check if owning shell is alive
-        shell_alive = shell_pid and is_pid_alive(shell_pid)
-
-        is_orphan = False
-        reason = None
-
-        if status == "running" and not server_alive:
-            is_orphan = True
-            reason = "server process dead"
-        elif status == "running" and not shell_alive:
-            is_orphan = True
-            reason = "owning shell dead"
-
-        if is_orphan:
-            orphans.append({
-                "server_id": server_id,
-                "profile": profile,
-                "port": server.get("port"),
-                "reason": reason,
-            })
-            if not dry_run:
-                # Kill if still somehow alive
-                if server_alive:
-                    try:
-                        os.kill(pid, signal.SIGTERM)
-                    except:
-                        pass
-                servers_to_remove.append(server_id)
-                cleaned["servers_killed"] += 1
-
-    # Remove orphaned servers from registry
-    if not dry_run and servers_to_remove:
-        registry["servers"] = [
-            s for s in registry.get("servers", [])
-            if s.get("id") not in servers_to_remove
-        ]
-        save_registry(registry)
-        cleaned["registry_cleaned"] = len(servers_to_remove)
-
-    # Check profiles for orphans (profile exists but no running server, shell dead)
-    for profile_name in profiles:
-        # Skip default profile — never clean it
-        if profile_name == "default":
-            continue
-
-        env_data = load_profile_env(profile_name)
-        profile_servers = get_servers_by_profile(profile_name)
-        has_running = any(s.get("status") == "running" for s in profile_servers)
-
-        if not has_running:
-            # Profile has no running server — check if shell is dead
-            shell_pid = None
-            for s in profile_servers:
-                shell_pid = s.get("shell_pid")
-                if shell_pid:
-                    break
-
-            shell_alive = shell_pid and is_pid_alive(shell_pid)
-
-            if not shell_alive:
-                orphans.append({
-                    "profile": profile_name,
-                    "reason": "no running server, shell dead",
-                })
-                if not dry_run:
-                    delete_profile_dir(profile_name)
-                    cleaned["profiles_deleted"] += 1
-
-    # Cleanup stale registry entries
-    if not dry_run:
-        cleanup_stale_entries()
-
-    if json_out:
-        print(json.dumps({
-            "dry_run": dry_run,
-            "orphans": orphans,
-            "cleaned": cleaned,
-        }, indent=2))
-        return
-
-    if not orphans:
-        console.print("[green]No orphans found — everything clean[/green]")
-        return
-
-    action = "Would clean" if dry_run else "Cleaned"
-    console.print(f"[yellow]{len(orphans)} orphan(s) found:[/yellow]")
-    for o in orphans:
-        name = o.get("profile", "?")
-        reason = o.get("reason", "?")
-        console.print(f"  {name}: {reason}")
-
-    if dry_run:
-        console.print(f"\n[dim]Run without --dry-run to clean[/dim]")
-    else:
-        console.print(f"\n[green]{action}:[/green]")
-        console.print(f"  Servers killed:    {cleaned['servers_killed']}")
-        console.print(f"  Profiles deleted:  {cleaned['profiles_deleted']}")
-        console.print(f"  Registry cleaned:  {cleaned['registry_cleaned']}")
-        console.print(f"  Registry cleaned:  {cleaned['registry_cleaned']}")
 
 
 @profile.command("init")

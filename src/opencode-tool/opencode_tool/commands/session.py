@@ -10,7 +10,6 @@ from rich.console import Console
 from rich.table import Table
 
 from ..api import OpenCodeAPI
-
 console = Console()
 
 
@@ -591,6 +590,7 @@ def _print_session_info(info: dict):
 def _monitor_session(api: OpenCodeAPI, session_id: str, interval: int):
     """Monitor session until blocked or idle.
     
+    Also checks ALL sessions for blocked state — catches HITL from subagents.
     Only prints when status changes. For retry, waits for configurable timeout
     (default 60s) before allowing termination on next interval check.
     """
@@ -604,11 +604,13 @@ def _monitor_session(api: OpenCodeAPI, session_id: str, interval: int):
     prev_status = None
     prev_permissions = False
     prev_question_blocked = False
+    prev_any_blocked = False
     retry_start = None
     retry_threshold_met = False
     
     try:
         while True:
+            # Check target session
             info = _get_session_info(api, session_id)
             if info is None:
                 console.print(f"[red]Session not found: {session_id}[/red]")
@@ -618,16 +620,31 @@ def _monitor_session(api: OpenCodeAPI, session_id: str, interval: int):
             current_permissions = bool(info['permissions'])
             current_question_blocked = info['question_blocked']
             
+            # Also check ALL sessions for any blocked state (catches subagent HITL)
+            any_blocked, blocked_info = _check_any_session_blocked(api, exclude_session=session_id)
+            current_any_blocked = any_blocked or current_permissions or current_question_blocked
+            
             # Detect status change
             status_changed = (
                 current_status != prev_status or
                 current_permissions != prev_permissions or
-                current_question_blocked != prev_question_blocked
+                current_question_blocked != prev_question_blocked or
+                current_any_blocked != prev_any_blocked
             )
             
             if status_changed:
                 # Print status on change
                 _print_session_info(info)
+                
+                # If a different session is blocked, show it
+                if blocked_info and blocked_info.get("blocked_session_id"):
+                    console.print()
+                    console.print(f"[yellow]⚠ HITL detected in another session![/yellow]")
+                    console.print(f"  Session: [cyan]{blocked_info['blocked_session_id']}[/cyan]")
+                    console.print(f"  Title:   {blocked_info.get('blocked_session_title', '?')}")
+                    hitl_type = "permission" if blocked_info.get("permissions") else "question"
+                    console.print(f"  Type:    {hitl_type}")
+                    console.print(f"  Run: [cyan]opencode-tool hitl detect {blocked_info['blocked_session_id']}[/cyan]")
                 
                 # Track retry state
                 if current_status == "retry":
@@ -640,7 +657,7 @@ def _monitor_session(api: OpenCodeAPI, session_id: str, interval: int):
                     retry_threshold_met = False
                 
                 # Check if we should stop (only on status change)
-                stop, reason = _should_stop(info)
+                stop, reason = _should_stop(info, any_blocked=any_blocked and blocked_info is not None)
                 
                 if stop:
                     console.print()
@@ -653,6 +670,14 @@ def _monitor_session(api: OpenCodeAPI, session_id: str, interval: int):
                         console.print("[yellow]⚠ Session blocked on question[/yellow]")
                         console.print("  Run: [cyan]opencode-tool question get <session_id>[/cyan]")
                         console.print("  Then: [cyan]opencode-tool question reply <request_id> \"Answer\"[/cyan]")
+                    elif reason == "SUBAGENT_HITL":
+                        blocked_sid = blocked_info.get("blocked_session_id", "?") if blocked_info else "?"
+                        blocked_title = blocked_info.get("blocked_session_title", "?") if blocked_info else "?"
+                        console.print("[yellow]⚠ Subagent blocked on HITL[/yellow]")
+                        console.print(f"  Session: [cyan]{blocked_sid}[/cyan]")
+                        console.print(f"  Title:   {blocked_title}")
+                        console.print(f"  Run: [cyan]opencode-tool hitl detect {blocked_sid}[/cyan]")
+                        console.print(f"  Then: [cyan]opencode-tool hitl respond {blocked_sid} \"Answer\"[/cyan]")
                     elif reason == "RETRY":
                         detail = info['detail']
                         message = detail.get("message", "")
@@ -680,6 +705,7 @@ def _monitor_session(api: OpenCodeAPI, session_id: str, interval: int):
             prev_status = current_status
             prev_permissions = current_permissions
             prev_question_blocked = current_question_blocked
+            prev_any_blocked = current_any_blocked
             
             time.sleep(interval)
     
@@ -688,7 +714,33 @@ def _monitor_session(api: OpenCodeAPI, session_id: str, interval: int):
         raise SystemExit(0)
 
 
-def _should_stop(info: dict) -> tuple:
+def _check_any_session_blocked(api: OpenCodeAPI, exclude_session: Optional[str] = None) -> tuple:
+    """Check if ANY session is blocked (catches subagent HITL).
+    
+    Returns (any_blocked: bool, blocked_info: dict or None).
+    """
+    try:
+        sessions = api.get_sessions()
+        for s in sessions:
+            sid = s.get("id")
+            if not sid or sid == exclude_session:
+                continue
+            
+            try:
+                info = _get_session_info(api, sid)
+                if info and (info.get("permissions") or info.get("question_blocked")):
+                    result = dict(info)
+                    result["blocked_session_id"] = sid
+                    result["blocked_session_title"] = s.get("title", "untitled")
+                    return True, result
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False, None
+
+
+def _should_stop(info: dict, any_blocked: bool = False) -> tuple:
     """Check if monitoring should stop."""
     status = info['status']
     
@@ -697,6 +749,9 @@ def _should_stop(info: dict) -> tuple:
     
     if info['question_blocked']:
         return True, "QUESTION"
+    
+    if any_blocked:
+        return True, "SUBAGENT_HITL"
     
     if status == "idle":
         return True, "IDLE"
@@ -717,6 +772,39 @@ def interrupt(session_id: str):
         console.print(f"[green]aborted: {session_id}[/green]")
     else:
         console.print(f"[red]failed to abort: {session_id}[/red]")
+        raise SystemExit(1)
+
+
+@session.command("delete")
+@click.argument("session_id")
+@click.option("--force", "-f", is_flag=True, help="Skip confirmation")
+@click.option("--json", "json_out", is_flag=True, help="Output JSON")
+def delete(session_id: str, force: bool, json_out: bool):
+    """Delete a session permanently.
+    
+    Use for truly unrecoverable sessions to clean up dirty state.
+    Tries DELETE /session/{id} first, falls back to abort if not supported.
+    """
+    api = OpenCodeAPI()
+    
+    if not force:
+        if not click.confirm(f"Delete session '{session_id}'? This cannot be undone."):
+            return
+    
+    # Try delete first, falls back to abort internally
+    deleted = api.delete_session(session_id)
+    
+    if json_out:
+        print(json.dumps({
+            "session_id": session_id,
+            "deleted": deleted,
+        }))
+        return
+    
+    if deleted:
+        console.print(f"[green]Deleted: {session_id}[/green]")
+    else:
+        console.print(f"[red]Failed to delete: {session_id}[/red]")
         raise SystemExit(1)
 
 

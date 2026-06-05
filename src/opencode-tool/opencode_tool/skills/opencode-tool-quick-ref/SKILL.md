@@ -1,13 +1,13 @@
 ---
-name: opencode-tool
+name: opencode-tool-quick-ref
 description: "Quick CLI command reference for opencode-tool — profile system, HITL, session management."
-version: 1.2.0
+version: 2.0.0
 author: hermes
 platforms: [linux, macos, wsl]
 metadata:
   hermes:
     tags: [opencode, cli, reference, quick]
-    related_skills: [opencode-developer, opencode-tool-commands]
+    related_skills: [opencode-developer, opencode-tool-cmd]
 ---
 
 # OpenCode Python CLI — Quick Reference
@@ -20,13 +20,14 @@ metadata:
 
 1. **ALWAYS use `opencode-tool`** — NEVER `opencode` CLI or `curl`
 2. **Profile-first** — Every command runs in a profile
-3. **Default profile** — Auto-created from config, connects to existing server
+3. **Default profile** — Uses port 4905 (not 4096), connects to existing server
+4. **HITL prevention** — Add suffix to prompts to prevent `ask` tool blocking
 
 ---
 
 ## Profile System
 
-**One profile = one opencode server connection (with tmux isolation).**
+**One profile = one opencode server connection.**
 
 ```bash
 # Create profile (auto-persists to file)
@@ -48,81 +49,15 @@ opencode-tool profile delete myproject
 # Terminate (kill server + delete)
 opencode-tool profile terminate myproject
 
-# Clean orphaned profiles
-opencode-tool profile cleanup
-opencode-tool profile cleanup --dry-run
-
 # Initialize default profile (from config)
 opencode-tool profile init
 ```
 
 **How profiles work:**
-- First command auto-creates profile if none active
-- **With tmux (recommended):** Each profile gets its own tmux session
-  - Tmux session keeps shell alive across `terminal()` calls
-  - PID-based `active-profile` file works correctly
-  - Cleaner detects tmux session liveness for safe cleanup
-- **Without tmux (legacy):** Each shell gets its own profile (PID-based)
-  - Profile persists to `~/.opencode-tool/active-profile-<pid>`
-  - ⚠️ Fails for Hermes: each `terminal()` call creates new PID
-- Default profile connects to config URL (http://localhost:4096)
+- Default profile uses port 4905 (avoids conflict with opencode's own 4096)
+- Profile loaded from `OPENCODE_TOOL_PROFILE` env var
+- Config loaded from `.env` file
 - New profiles fork settings from default
-
-### Tmux Isolation (Recommended)
-
-```bash
-# tmux must be installed for automatic isolation
-tmux -V  # Check if tmux is installed
-
-# Install tmux (if not installed)
-sudo apt-get install tmux  # Ubuntu/Debian
-brew install tmux          # macOS
-sudo pacman -S tmux        # Arch Linux
-```
-
-**How it works:**
-
-1. `opencode-tool run "task"` → creates tmux session `opencode-{name}`
-2. Starts opencode server inside tmux: `opencode serve --port {port}`
-3. Sets env vars: `OPENCODE_SERVER_URL`, `OPENCODE_TOOL_PROFILE`
-4. Subsequent calls reuse the same profile via env vars
-5. Tmux session stays alive until:
-   - Profile is terminated: `opencode-tool profile terminate <name>`
-   - Cleaner detects staleness: `last_used_at` > 10 minutes
-   - Tmux session is killed externally
-
-**Benefits for Hermes:**
-
-- Shell PID persists across `terminal()` calls (it's the tmux shell)
-- Cleaner won't kill active servers mid-generation
-- Multiple Hermes sessions can run concurrently
-
-### Legacy PID-Based Isolation (Without tmux)
-
-⚠️ **Not recommended for Hermes** — each `terminal()` call creates a new shell with a new PID, causing the cleaner to mark active profiles as orphaned.
-
-**Workaround if tmux is not available:**
-
-```python
-# Must chain commands to preserve env vars
-terminal(command='eval "$(opencode-tool run \'task1\' 2>&1 >/dev/null)" && opencode-tool run \'task2\'')
-```
-
----
-
-## Two Ways to Get a Server
-
-**Option 1: Connect to existing server**
-```bash
-opencode-tool profile init              # creates default profile
-# or
-opencode-tool profile set --collaborate myuser --url http://localhost:4096
-```
-
-**Option 2: Start new server**
-```bash
-opencode-tool profile set myproject     # auto-starts on random port
-```
 
 ---
 
@@ -137,6 +72,8 @@ opencode-tool session get <sid> --response
 opencode-tool session messages <sid> --last 5
 opencode-tool session status <sid> --monitor
 opencode-tool session interrupt <sid>
+opencode-tool session delete <sid>              # Delete dirty session
+opencode-tool session delete <sid> --force      # Skip confirmation
 ```
 
 ## Run
@@ -152,12 +89,21 @@ opencode-tool run -s <sid> --steer "new direction"
 ## HITL (Human-In-The-Loop)
 
 ```bash
+# Detection (layers: REST API → message scan → all-sessions → TUI)
 opencode-tool hitl detect <sid>
 opencode-tool hitl detect <sid> --wait
+opencode-tool hitl detect <sid> --all-sessions    # Catch subagent HITL
+
+# Response (layers: REST API → TUI interrupt → tmux keystrokes)
 opencode-tool hitl respond <sid> "yes"       # answer question
 opencode-tool hitl respond <sid> once         # grant permission
 opencode-tool hitl respond <sid> reject       # reject
 opencode-tool hitl dismiss <sid>              # stop agent
+```
+
+**HITL Prevention (add to every prompt):**
+```
+— If you have questions, answer them inline in your response. Do NOT use the ask or question tool.
 ```
 
 ## Permissions (legacy)
@@ -183,12 +129,27 @@ opencode-tool server serve
 opencode-tool server stop
 ```
 
+## Cleaner
+
+```bash
+opencode-tool cleaner run-once    # Clean zombie servers
+opencode-tool cleaner start       # Start daemon
+opencode-tool cleaner stop        # Stop daemon
+opencode-tool cleaner status      # Check status
+```
+
 ## Config
 
 ```bash
 opencode-tool config get
 opencode-tool config set <key> <value>
 ```
+
+**Config keys:**
+- `opencode_server_url` — Default server URL (default: http://localhost:4905)
+- `monitor_retry_timeout` — Retry timeout in seconds (default: 60)
+- `default_model` — Default model ID (default: mimo-v2.5)
+- `default_variant` — Default variant (default: high)
 
 ## Skills
 
@@ -213,6 +174,9 @@ sid=$(opencode-tool run "task")
 opencode-tool hitl detect $sid
 opencode-tool hitl respond $sid "yes"
 
-# Clean up
-opencode-tool profile cleanup
+# Clean up dirty session
+opencode-tool session delete $sid --force
+
+# Clean zombie servers
+opencode-tool cleaner run-once
 ```

@@ -1,7 +1,18 @@
 """HITL (Human-In-The-Loop) management commands for opencode-tool.
 
 Detects and responds to permission requests and questions from the agent.
-Supports REST API + TUI fallback.
+Supports REST API + message scanning + TUI control + tmux fallback.
+
+Detection layers:
+  1. REST API (fast, non-blocking)
+  2. Message scanning (moderate, non-blocking)
+  3. All-sessions scan (catches subagent HITL)
+  4. TUI control/next (slow, blocking, with --wait)
+
+Response layers:
+  1. REST API reply (fast)
+  2. TUI execute-command (fallback)
+  3. Tmux keystrokes (last resort)
 
 Usage:
     opencode-tool hitl detect <session_id> [--json] [--wait] [--timeout 5]
@@ -17,7 +28,6 @@ import click
 from rich.console import Console
 
 from ..api import OpenCodeAPI
-
 console = Console()
 
 
@@ -61,8 +71,39 @@ def _detect_messages(api: OpenCodeAPI, session_id: str) -> Tuple[Optional[dict],
     return None, None
 
 
+def _detect_all_sessions(api: OpenCodeAPI, exclude_session: Optional[str] = None) -> Tuple[Optional[dict], Optional[str]]:
+    """Layer 3: Check ALL active sessions for any blocked state.
+
+    Catches HITL from subagents — when a subagent spawns and gets blocked,
+    the parent session may not show it, but the subagent's session will.
+
+    Returns the first blocked session found (with session_id in the result).
+    """
+    try:
+        sessions = api.get_sessions()
+        for s in sessions:
+            sid = s.get("id")
+            if not sid or sid == exclude_session:
+                continue
+
+            try:
+                from ..commands.session import _get_session_info
+                info = _get_session_info(api, sid)
+                if info and (info.get("permissions") or info.get("question_blocked")):
+                    # Include the session_id so caller knows which session is blocked
+                    result = dict(info)
+                    result["blocked_session_id"] = sid
+                    result["blocked_session_title"] = s.get("title", "untitled")
+                    return result, "all-sessions-scan"
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None, None
+
+
 def _detect_tui(api: OpenCodeAPI, timeout: int = 5) -> Tuple[Optional[dict], Optional[str]]:
-    """Layer 3: TUI control/next (slow, blocking)."""
+    """Layer 4: TUI control/next (slow, blocking)."""
     request = api.tui_control_next(timeout=timeout)
     if request:
         return request, "tui-control"
@@ -74,19 +115,26 @@ def _detect_all(
     session_id: str,
     wait: bool = False,
     timeout: int = 5,
+    check_all_sessions: bool = True,
 ) -> Tuple[Optional[dict], Optional[str]]:
     """Run all detection layers in order."""
-    # Layer 1: REST API
+    # Layer 1: REST API (target session)
     result, source = _detect_rest(api, session_id)
     if result:
         return result, source
 
-    # Layer 2: Message scan
+    # Layer 2: Message scan (target session)
     result, source = _detect_messages(api, session_id)
     if result:
         return result, source
 
-    # Layer 3: TUI (with --wait)
+    # Layer 3: All-sessions scan (catches subagent HITL)
+    if check_all_sessions:
+        result, source = _detect_all_sessions(api, exclude_session=session_id)
+        if result:
+            return result, source
+
+    # Layer 4: TUI (with --wait)
     if wait:
         result, source = _detect_tui(api, timeout)
         if result:
@@ -140,6 +188,35 @@ def _respond_question_rest(api: OpenCodeAPI, session_id: str, answer: str) -> bo
     return False
 
 
+def _respond_via_tmux(answer: str, hitl_type: str) -> bool:
+    """Respond to HITL via tmux keystrokes (last resort).
+
+    Finds the tmux session for the current profile and sends keystrokes.
+    """
+    try:
+        from ..tmux import (
+            find_profile_tmux_session,
+            tmux_respond_question,
+            tmux_respond_permission,
+            is_tmux_available,
+        )
+
+        if not is_tmux_available():
+            return False
+
+        tmux_session = find_profile_tmux_session()
+        if not tmux_session:
+            return False
+
+        if hitl_type == "question":
+            return tmux_respond_question(tmux_session, answer)
+        elif hitl_type == "permission":
+            return tmux_respond_permission(tmux_session, answer)
+        return False
+    except Exception:
+        return False
+
+
 def _print_hitl_details(result: dict):
     """Print HITL detection details."""
     hitl_type = _get_hitl_type(result)
@@ -188,7 +265,7 @@ def hitl():
     """Manage Human-In-The-Loop requests.
 
     Detects pending permission requests and questions from the agent.
-    Supports REST API + TUI fallback.
+    Supports REST API + message scanning + all-sessions scan + tmux fallback.
     """
     pass
 
@@ -198,35 +275,54 @@ def hitl():
 @click.option("--json", "json_out", is_flag=True, help="Output JSON")
 @click.option("--wait", is_flag=True, help="Block until HITL found (uses TUI)")
 @click.option("--timeout", default=5, help="Wait timeout in seconds")
-def detect(session_id: str, json_out: bool, wait: bool, timeout: int):
+@click.option("--all-sessions", "check_all", is_flag=True, help="Check all sessions (catches subagent HITL)")
+def detect(session_id: str, json_out: bool, wait: bool, timeout: int, check_all: bool):
     """Detect pending HITL requests for a session.
 
     Tries detection layers in order:
       1. REST API (fast)
       2. Message scanning (moderate)
-      3. TUI control/next (with --wait)
+      3. All-sessions scan (catches subagent HITL)
+      4. TUI control/next (with --wait)
+
+    Use --all-sessions to also check other sessions for blocked state.
+    This catches HITL from subagents that aren't visible in the target session.
     """
     api = OpenCodeAPI()
-    profile = os.environ.get("OPENCODE_TOOL_PROFILE", "auto")
+    profile = os.environ.get("OPENCODE_TOOL_PROFILE", "default")
 
-    result, source = _detect_all(api, session_id, wait, timeout)
+    result, source = _detect_all(api, session_id, wait, timeout, check_all_sessions=check_all or True)
     hitl_type = _get_hitl_type(result)
 
     if json_out:
-        print(json.dumps({
+        output = {
             "session_id": session_id,
             "profile": profile,
             "type": hitl_type,
             "source": source,
             "data": result,
-        }, indent=2))
+        }
+        # If blocked session is different, include it
+        if result and result.get("blocked_session_id"):
+            output["blocked_session_id"] = result["blocked_session_id"]
+            output["blocked_session_title"] = result.get("blocked_session_title", "")
+        print(json.dumps(output, indent=2))
         return
 
     if not result:
         console.print("[green]No pending HITL requests[/green]")
         return
 
-    console.print(f"Session: [cyan]{session_id}[/cyan]")
+    # Show which session is blocked (if different from requested)
+    blocked_sid = result.get("blocked_session_id")
+    if blocked_sid and blocked_sid != session_id:
+        console.print(f"[yellow]HITL detected in DIFFERENT session![/yellow]")
+        console.print(f"  Requested: [cyan]{session_id}[/cyan]")
+        console.print(f"  Blocked:   [cyan]{blocked_sid}[/cyan]")
+        console.print(f"  Title:     {result.get('blocked_session_title', '?')}")
+    else:
+        console.print(f"Session: [cyan]{session_id}[/cyan]")
+
     console.print(f"Profile: [yellow]{profile}[/yellow]")
     console.print(f"Source:  [dim]{source}[/dim]")
     console.print(f"Type:    [bold]{hitl_type}[/bold]")
@@ -248,6 +344,7 @@ def respond(session_id: str, answer: str, json_out: bool):
     Tries response layers in order:
       1. REST API reply (fast)
       2. TUI execute-command (fallback)
+      3. Tmux keystrokes (last resort)
     """
     api = OpenCodeAPI()
 
@@ -255,8 +352,11 @@ def respond(session_id: str, answer: str, json_out: bool):
     result, _ = _detect_all(api, session_id)
     hitl_type = _get_hitl_type(result)
 
+    # If blocked session is different, use that session_id
+    actual_session_id = result.get("blocked_session_id", session_id) if result else session_id
+
     if hitl_type == "permission":
-        responded = _respond_permission_rest(api, session_id, answer)
+        responded = _respond_permission_rest(api, actual_session_id, answer)
         source = "rest-api" if responded else None
 
         if not responded:
@@ -264,21 +364,30 @@ def respond(session_id: str, answer: str, json_out: bool):
             api.tui_execute_command("session.interrupt")
             source = "tui"
 
+        if not responded and source != "tui":
+            # Tmux fallback (last resort)
+            if _respond_via_tmux(answer, "permission"):
+                responded = True
+                source = "tmux"
+
         if json_out:
             print(json.dumps({
-                "session_id": session_id,
+                "session_id": actual_session_id,
                 "type": "permission",
                 "responded": responded,
                 "answer": answer,
                 "source": source,
             }))
         elif responded:
-            console.print(f"[green]Granted: {answer}[/green]")
+            if source == "tmux":
+                console.print(f"[green]Granted via tmux: {answer}[/green]")
+            else:
+                console.print(f"[green]Granted: {answer}[/green]")
         else:
             console.print("[red]Failed to respond to permission[/red]")
 
     elif hitl_type == "question":
-        responded = _respond_question_rest(api, session_id, answer)
+        responded = _respond_question_rest(api, actual_session_id, answer)
         source = "rest-api" if responded else None
 
         if not responded:
@@ -287,9 +396,15 @@ def respond(session_id: str, answer: str, json_out: bool):
             source = "tui"
             responded = True  # Handled via TUI
 
+        if not responded:
+            # Tmux fallback (last resort)
+            if _respond_via_tmux(answer, "question"):
+                responded = True
+                source = "tmux"
+
         if json_out:
             print(json.dumps({
-                "session_id": session_id,
+                "session_id": actual_session_id,
                 "type": "question",
                 "responded": responded,
                 "answer": answer,
@@ -298,6 +413,8 @@ def respond(session_id: str, answer: str, json_out: bool):
         elif responded:
             if source == "tui":
                 console.print(f"[yellow]Question not replyable via API — interrupted via TUI[/yellow]")
+            elif source == "tmux":
+                console.print(f"[green]Replied via tmux: {answer}[/green]")
             else:
                 console.print(f"[green]Replied: {answer}[/green]")
         else:
@@ -324,6 +441,7 @@ def dismiss(session_id: str, json_out: bool):
     Tries in order:
       1. REST API abort
       2. TUI session.interrupt (fallback)
+      3. Tmux Escape (last resort)
     """
     api = OpenCodeAPI()
 
@@ -336,6 +454,17 @@ def dismiss(session_id: str, json_out: bool):
         api.tui_execute_command("session.interrupt")
         source = "tui"
         dismissed = True
+
+    # Layer 3: Tmux fallback
+    if source == "tui":
+        try:
+            from ..tmux import find_profile_tmux_session, tmux_dismiss_hitl, is_tmux_available
+            if is_tmux_available():
+                tmux_session = find_profile_tmux_session()
+                if tmux_session:
+                    tmux_dismiss_hitl(tmux_session)
+        except Exception:
+            pass
 
     if json_out:
         print(json.dumps({

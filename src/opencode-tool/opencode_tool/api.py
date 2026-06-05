@@ -122,6 +122,26 @@ class OpenCodeAPI:
         """Abort a running session."""
         result = self._post(f"/session/{session_id}/abort")
         return result is True
+
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session permanently.
+
+        Tries DELETE /session/{id} first, falls back to abort if not supported.
+        Use for truly unrecoverable sessions to clean up dirty state.
+        """
+        try:
+            resp = requests.delete(
+                f"{self.base_url}/session/{session_id}",
+                auth=self.auth,
+                timeout=10,
+            )
+            if resp.status_code in (200, 204):
+                return True
+            # DELETE not supported — fall back to abort
+            return self.abort_session(session_id)
+        except requests.exceptions.RequestException:
+            # DELETE endpoint doesn't exist — fall back to abort
+            return self.abort_session(session_id)
     
     def get_permissions(self) -> list:
         """Get all pending permissions."""
