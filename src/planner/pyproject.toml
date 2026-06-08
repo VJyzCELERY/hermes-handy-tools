@@ -1,0 +1,38 @@
+[project]
+name = "planner"
+version = "0.1.0"
+description = "SQLite-backed task planner with web UI and Hermes integration"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.0",
+    "pydantic>=2.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "jinja2>=3.1",
+    "aiosqlite>=0.19",
+]
+
+[project.scripts]
+planner = "planner.cli:main"
+
+[tool.ruff]
+line-length = 88
+select = ["E", "W", "F", "D", "C901"]
+ignore = []
+fixable = ["ALL"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[lint.per-file-ignores]
+"**/tests/**" = ["D"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers --disable-warnings --maxfail=2 --cov=planner --cov-report=html"
+
+[tool.coverage.run]
+source = ["planner"]
