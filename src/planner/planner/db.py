@@ -117,6 +117,12 @@ class Database:
         self.conn.commit()
         return cur.rowcount > 0
 
+    def delete_project(self, name: str) -> bool:
+        """Delete a project and all its tasks, goals, deps, logs, tags (CASCADE)."""
+        cur = self.conn.execute("DELETE FROM projects WHERE name = ?", (name,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
     # --- Goals ---
 
     def create_goal(self, project_id: str, title: str, description: str = "") -> Goal:
@@ -280,10 +286,14 @@ class Database:
             return None
         return self.activate_task(task.id)
 
-    def complete_task(self, task_id: str, result: str = "") -> Optional[Task]:
+    def complete_task(self, task_id: str, result: str = "") -> tuple[Optional[Task], list[Task]]:
+        """Complete a task and auto-activate any ready dependents.
+
+        Returns (completed_task, list_of_newly_activated_tasks).
+        """
         task = self.get_task(task_id)
         if task is None or task.status != TaskStatus.ACTIVE:
-            return None
+            return None, []
 
         now = _now()
         self.conn.execute(
@@ -299,7 +309,25 @@ class Database:
             )
 
         self.conn.commit()
-        return self.get_task(task_id)
+
+        # Auto-activate any planned tasks whose dependencies are now all met
+        activated = self._auto_activate_ready(task.project_id)
+
+        return self.get_task(task_id), activated
+
+    def _auto_activate_ready(self, project_id: str) -> list[Task]:
+        """Find all planned tasks with met deps and activate them."""
+        activated = []
+        while True:
+            ready = self.find_next_ready(project_id)
+            if ready is None:
+                break
+            t = self.activate_task(ready.id)
+            if t:
+                activated.append(t)
+            else:
+                break
+        return activated
 
     def block_task(self, task_id: str, reason: str = "") -> Optional[Task]:
         task = self.get_task(task_id)
@@ -321,6 +349,20 @@ class Database:
         self.conn.commit()
         return self.get_task(task_id)
 
+    def unblock_task(self, task_id: str) -> Optional[Task]:
+        """Move a blocked task back to active."""
+        task = self.get_task(task_id)
+        if task is None or task.status != TaskStatus.BLOCKED:
+            return None
+
+        now = _now()
+        self.conn.execute(
+            "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
+            (TaskStatus.ACTIVE.value, now, task_id),
+        )
+        self.conn.commit()
+        return self.get_task(task_id)
+
     def cancel_task(self, task_id: str, reason: str = "") -> Optional[Task]:
         task = self.get_task(task_id)
         if task is None:
@@ -338,6 +380,21 @@ class Database:
                 (task_id, f"CANCELLED: {reason}", LogSource.AGENT.value, now),
             )
 
+        self.conn.commit()
+        return self.get_task(task_id)
+
+    def reset_task(self, task_id: str) -> Optional[Task]:
+        """Reset a task back to planned status (from any status)."""
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+
+        now = _now()
+        self.conn.execute(
+            "UPDATE tasks SET status = ?, started_at = NULL, completed_at = NULL, "
+            "updated_at = ? WHERE id = ?",
+            (TaskStatus.PLANNED.value, now, task_id),
+        )
         self.conn.commit()
         return self.get_task(task_id)
 

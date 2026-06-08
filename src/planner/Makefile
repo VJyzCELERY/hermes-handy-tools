@@ -19,7 +19,7 @@ complexity:
 	uv run radon mi . -n B
 
 web:
-	uv run planner web --port 8080
+	uv run planner web --port 7749
 
 clean:
 	rm -rf .pytest_cache .coverage coverage.xml dist build *.egg-info __pycache__ .ruff_cache

@@ -3,24 +3,100 @@
 ## Overview
 
 Planner integrates with Hermes Agent through:
-1. **Skill** — instructions for LLM on how to use the CLI
-2. **Orchestrator/Worker roles** — enforced by the system
-3. **Custom tools** — optional native Hermes tools wrapping the CLI
+1. **Custom tool** — native Hermes tool wrapping the CLI (primary)
+2. **Skill** — fallback instructions for LLM on how to use the CLI
+3. **Orchestrator/Worker roles** — enforced by the system
 4. **Background execution** — subagents for autonomous task execution
 
-## Skill Installation
+## Custom Tool (Primary)
+
+The planner registers as a native Hermes tool at `~/.hermes/hermes-agent/tools/planner_tool.py`.
+
+### How it works
+
+The tool wraps the planner CLI via subprocess calls. When Hermes calls the `planner` tool, the handler:
+1. Maps `action` + `args` to CLI arguments
+2. Runs `planner <subcommand> --json` via subprocess
+3. Returns parsed JSON output
+
+### Installation
+
+```bash
+# 1. Install the planner CLI
+cd src/planner
+uv sync          # or: pip install -e .
+
+# 2. Set PLANNER_DIR (for uv-based invocation)
+export PLANNER_DIR="$(pwd)"
+
+# 3. Copy the tool file (already done if you're reading this)
+cp ~/.hermes/hermes-agent/tools/planner_tool.py ~/.hermes/hermes-agent/tools/
+
+# 4. Restart Hermes (/reset)
+```
+
+### Configuration
+
+| Env Var | Purpose | Default |
+|---------|---------|---------|
+| `PLANNER_DIR` | Path to planner project root | Falls back to PATH lookup |
+
+If `PLANNER_DIR` is set, the tool uses `uv run --directory $PLANNER_DIR planner` to invoke the CLI. Otherwise, it looks for `planner` on PATH.
+
+### Tool Schema
+
+Single tool with two parameters:
+
+```
+planner(action: str, args?: dict)
+```
+
+**Actions:**
+
+| Category | Actions |
+|----------|---------|
+| Project | `project_create`, `project_list`, `project_show`, `project_archive` |
+| Goal | `goal_add`, `goal_list`, `goal_complete` |
+| Task | `task_add`, `task_list`, `task_show`, `task_activate`, `task_complete`, `task_block`, `task_cancel`, `task_delete`, `task_edit`, `task_log`, `task_search`, `task_prioritize`, `task_move` |
+| Deps | `dep_add`, `dep_remove`, `dep_list` |
+| Workflow | `status`, `dispatch` |
+
+### Example Calls
+
+```python
+# Create a project
+planner(action="project_create", args={"name": "my-project", "description": "..."})
+
+# Add a task
+planner(action="task_add", args={"project": "my-project", "title": "Step 1", "body": "..."})
+
+# Activate next task
+planner(action="task_activate", args={"project": "my-project"})
+
+# Complete active task
+planner(action="task_complete", args={"result": "Done"})
+
+# Get project status
+planner(action="status", args={"project": "my-project"})
+
+# Dispatch next task for a worker
+planner(action="dispatch", args={"project": "my-project", "profile": "worker"})
+```
+
+## Skill (Fallback)
+
+The skill at `skill/SKILL.md` provides CLI-based instructions for Hermes. Use this when:
+- The custom tool isn't installed
+- You prefer CLI commands over tool calls
+- You're running in an environment without the tool file
+
+### Skill Installation
 
 ```bash
 planner install-skill
 ```
 
 Copies `skill/SKILL.md` to `~/.hermes/skills/planner/SKILL.md`.
-
-After installation, Hermes can load it:
-
-```
-skill_view(name='planner')
-```
 
 ## Orchestrator Mode
 
@@ -29,13 +105,13 @@ skill_view(name='planner')
 ### Flow
 
 ```
-1. planner status --project <name>
+1. planner(action="status", args={"project": "<name>"})
 2. Report state to user
 3. Wait for go-ahead
-4. planner dispatch --project <name> --profile <profile>
+4. planner(action="dispatch", args={"project": "<name>", "profile": "<profile>"})
 5. delegate_task to worker subagent
 6. Wait for completion (background + notify_on_complete)
-7. planner verify --project <name> --task-id <id>
+7. planner(action="task_complete", args={"result": "..."})
 8. Notify user (Telegram)
 9. Repeat
 ```
@@ -53,12 +129,10 @@ skill_view(name='planner')
 ### Flow
 
 ```
-1. skill_view(name='planner')
-2. planner dispatch --project <name>
-3. Execute the task (follow body instructions)
-4. planner task complete --result "<summary>"
-5. planner task log --message "Completed"
-6. STOP
+1. planner(action="dispatch", args={"project": "<name>"})
+2. Execute the task (follow body instructions)
+3. planner(action="task_complete", args={"result": "<summary>"})
+4. STOP
 ```
 
 ### Rules
@@ -73,11 +147,10 @@ skill_view(name='planner')
 Work on the <project> project. You are a WORKER, not an orchestrator.
 
 STEPS (follow exactly):
-1. Load skill: skill_view(name='planner')
-2. Run: planner dispatch --project <project>
-3. Execute the active task (ONE task only)
-4. Run: planner task complete --result "<summary>"
-5. STOP. Do NOT execute the next task.
+1. Run: planner(action="dispatch", args={"project": "<project>"})
+2. Execute the active task (ONE task only)
+3. Run: planner(action="task_complete", args={"result": "<summary>"})
+4. STOP. Do NOT execute the next task.
 
 ONE TASK. THEN STOP.
 ```
@@ -96,23 +169,6 @@ planner dispatch --project tinycua --profile tinycua-developer
 ```bash
 planner dispatch --project tinycua --profile tinycua-developer  # code tasks
 planner dispatch --project tinycua --profile reviewer           # review tasks
-```
-
-## Custom Hermes Tools (Optional)
-
-Register as a native Hermes tool:
-
-```python
-# ~/.hermes/hermes-agent/tools/planner.py
-from hermes_agent.tools import registry
-
-@registry.register("planner")
-def planner_tool(action: str, **kwargs):
-    """Task planner operations."""
-    import subprocess
-    cmd = ["planner", action] + [f"--{k}={v}" for k, v in kwargs.items()]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    return {"output": result.stdout, "error": result.stderr, "code": result.returncode}
 ```
 
 ## Migration from Development-Log

@@ -20,31 +20,36 @@ Planner fixes all of these with SQLite storage, proper data models, and a web da
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                   Planner                        │
-├─────────────┬─────────────┬─────────────────────┤
-│   CLI       │   Web UI    │   Hermes Skill      │
-│  (Click)    │  (FastAPI)  │   (SKILL.md)        │
-├─────────────┴─────────────┴─────────────────────┤
-│              Core (db.py, models.py)             │
-├─────────────────────────────────────────────────┤
-│              SQLite Database                     │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                        Planner                                │
+├──────────────┬──────────────┬──────────────┬────────────────┤
+│  Custom Tool │    CLI       │   Web UI     │  Hermes Skill  │
+│ (planner.py) │   (Click)    │  (FastAPI)   │  (SKILL.md)    │
+├──────────────┴──────────────┴──────────────┴────────────────┤
+│               Core (db.py, models.py)                        │
+├──────────────────────────────────────────────────────────────┤
+│               SQLite Database                                │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ### Components
 
-1. **CLI** (`cli.py`) — Click-based command line interface
-2. **Core** (`db.py`, `models.py`) — Database operations and data models
-3. **Web UI** (`web/`) — FastAPI + Jinja2 + SortableJS dashboard
-4. **Skill** (`skill/`) — Hermes Agent integration instructions
+1. **Custom Tool** (`~/.hermes/hermes-agent/tools/planner_tool.py`) — native Hermes tool wrapping the CLI via subprocess. This is the **primary** integration method.
+2. **CLI** (`cli.py`) — Click-based command line interface, used by the custom tool
+3. **Core** (`db.py`, `models.py`) — Database operations and data models
+4. **Web UI** (`web/`) — FastAPI + Jinja2 + SortableJS dashboard
+5. **Skill** (`skill/`) — Fallback Hermes Agent instructions for CLI usage
 
 ### Data Flow
 
 ```
-User/Hermes → CLI/API → Core → SQLite
-                         ↓
-                    Web UI (reads)
+Hermes Agent ──→ Custom Tool ──→ CLI ──→ Core ──→ SQLite
+                     │                       ↑
+                     └── (subprocess) ────────┘
+                              ↑
+User/Hermes ──→ CLI ──────────┘
+                          ↓
+                     Web UI (reads)
 ```
 
 ## Data Model
@@ -109,7 +114,6 @@ src/planner/
 ├── cli.py              # Click CLI entry point
 ├── db.py               # SQLite operations
 ├── models.py           # Pydantic models
-├── orchestrator.py     # Orchestrator/worker role logic
 ├── web/
 │   ├── __init__.py
 │   ├── app.py          # FastAPI app
@@ -117,7 +121,7 @@ src/planner/
 │   ├── static/         # JS/CSS (SortableJS, vanilla JS)
 │   └── templates/      # Jinja2 HTML
 ├── migrations/         # Schema migrations
-├── skill/              # Hermes skill files
+├── skill/              # Hermes skill files (fallback)
 │   └── SKILL.md
 ├── docs/               # This documentation
 │   ├── DESIGN.md       # This file
@@ -128,6 +132,9 @@ src/planner/
 └── tests/
     ├── unit/
     └── integration/
+
+# Installed separately (Hermes tools directory):
+~/.hermes/hermes-agent/tools/planner_tool.py   # Native Hermes tool
 ```
 
 ## Tech Stack

@@ -205,6 +205,9 @@ planner verify --project PROJECT --task-id ID
 planner web [--host HOST] [--port PORT] [--reload]
 ```
 
+Default port: **7749**. Serves the dashboard at `http://localhost:7749`.
+API docs (Swagger) at `http://localhost:7749/docs`.
+
 ## Skill Installation
 
 ### `planner install-skill`

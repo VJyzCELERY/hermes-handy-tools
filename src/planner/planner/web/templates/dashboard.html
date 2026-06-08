@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Planner{% if current %} — {{ current.name }}{% endif %}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <style>
+        :root {
+            --pico-font-size: 90%;
+            /* Softer dark palette */
+            --pico-background-color: #1a1b26;
+            --pico-card-background-color: #24283b;
+            --pico-border-color: #3b4261;
+            --pico-color: #c0caf5;
+            --pico-muted-color: #7982a9;
+            --pico-primary: #7aa2f7;
+            --pico-primary-hover: #89b4fa;
+            --pico-primary-focus: rgba(122, 162, 247, 0.25);
+            --pico-secondary: #bb9af7;
+            --pico-secondary-hover: #c4b5fd;
+            --pico-success: #9ece6a;
+            --pico-success-hover: #a3d977;
+            --pico-danger: #f7768e;
+            --pico-danger-hover: #ff8fa3;
+            --pico-warning: #e0af68;
+            --pico-link-color: #7aa2f7;
+            --pico-link-hover: #89b4fa;
+            --pico-code-background-color: #1f2335;
+            --pico-modal-background-color: #24283b;
+            --pico-overlay-background-color: rgba(0, 0, 0, 0.6);
+        }
+        body { padding: 1rem 2rem; background: var(--pico-background-color); }
+        header { margin-bottom: 1rem; }
+        header h1 { margin: 0; font-size: 1.4rem; }
+        header nav { margin-top: 0.5rem; }
+        header nav a { margin-right: 0.5rem; font-size: 0.85rem; padding: 0.3rem 0.6rem; }
+
+        .status-bar {
+            display: flex; gap: 1rem; flex-wrap: wrap;
+            margin-bottom: 1rem; padding: 0.7rem;
+            background: var(--pico-card-background-color);
+            border-radius: var(--pico-border-radius);
+        }
+        .status-bar .count { font-weight: bold; }
+        .status-bar .label { color: var(--pico-muted-color); font-size: 0.85rem; }
+
+        .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; }
+        .column { min-width: 280px; }
+        .column h2 {
+            font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em;
+            margin-bottom: 0.5rem; padding-bottom: 0.3rem;
+            border-bottom: 2px solid var(--pico-muted-border-color);
+        }
+        .column h2 .badge {
+            display: inline-block; font-size: 0.75rem; padding: 0.1rem 0.4rem;
+            border-radius: 999px; background: var(--pico-muted-border-color);
+            margin-left: 0.3rem;
+        }
+
+        .task-list { list-style: none; padding: 0; min-height: 40px; }
+        .task-list:empty::after {
+            content: "No tasks"; color: var(--pico-muted-color);
+            font-style: italic; font-size: 0.85rem;
+        }
+
+        .task-card {
+            padding: 0.6rem 0.8rem; margin-bottom: 0.4rem;
+            background: var(--pico-card-background-color);
+            border: 1px solid var(--pico-muted-border-color);
+            border-radius: var(--pico-border-radius);
+            cursor: grab; transition: box-shadow 0.15s;
+        }
+        .task-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .task-card.sortable-ghost { opacity: 0.4; }
+        .task-card.sortable-drag { box-shadow: 0 4px 16px rgba(0,0,0,0.2); }
+
+        .task-title { font-weight: 600; font-size: 0.9rem; margin: 0 0 0.2rem; }
+        .task-meta { font-size: 0.78rem; color: var(--pico-muted-color); display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        .task-id { font-family: monospace; font-size: 0.72rem; color: var(--pico-muted-color); opacity: 0.7; cursor: pointer; }
+        .task-id:hover { opacity: 1; text-decoration: underline; }
+        .dep-met { color: #9ece6a; }
+        .dep-active { color: #7aa2f7; }
+        .dep-unmet { color: #7982a9; }
+        .task-meta .priority { font-weight: 600; }
+        .task-meta .assignee { color: var(--pico-primary); }
+        .tag {
+            display: inline-block; font-size: 0.7rem; padding: 0.05rem 0.35rem;
+            background: var(--pico-insular-background); border-radius: 999px;
+            border: 1px solid var(--pico-muted-border-color);
+        }
+
+        .task-actions { margin-top: 0.4rem; display: flex; gap: 0.3rem; flex-wrap: wrap; }
+        .task-actions button {
+            font-size: 0.72rem; padding: 0.15rem 0.4rem; margin: 0;
+            border-radius: var(--pico-border-radius);
+        }
+        .task-body {
+            font-size: 0.8rem; color: var(--pico-muted-color);
+            margin-top: 0.3rem; white-space: pre-wrap;
+            max-height: 80px; overflow: hidden;
+        }
+        .deps { font-size: 0.75rem; color: var(--pico-muted-color); margin-top: 0.2rem; }
+
+        .active-indicator {
+            border-left: 3px solid var(--pico-primary);
+            background: color-mix(in srgb, var(--pico-primary) 5%, transparent);
+        }
+
+        .modal-overlay {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: var(--pico-card-background-color); border-radius: var(--pico-border-radius);
+            padding: 1.5rem; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;
+        }
+        .modal h3 { margin-top: 0; }
+        .modal textarea { min-height: 80px; font-size: 0.85rem; }
+        .modal input, .modal select { font-size: 0.85rem; }
+
+        #toast {
+            position: fixed; bottom: 1rem; right: 1rem; padding: 0.6rem 1rem;
+            background: var(--pico-primary); color: white; border-radius: var(--pico-border-radius);
+            font-size: 0.85rem; opacity: 0; transition: opacity 0.3s; z-index: 2000;
+            max-width: 400px; word-wrap: break-word;
+        }
+        #toast.show { opacity: 1; }
+        #toast.toast-error { background: var(--pico-danger); font-weight: 600; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>📋 Planner{% if current %} — {{ current.name }}{% endif %}</h1>
+        <nav>
+            {% for p in projects %}
+            <a href="/?project={{ p.name }}" class="{% if current and current.name == p.name %}secondary{% endif %}">
+                {{ p.name }}
+            </a>
+            {% endfor %}
+            <button onclick="openNewProjectModal()" class="outline" style="font-size:0.8rem;padding:0.2rem 0.5rem;margin-left:0.3rem">+ Project</button>
+            {% if current %}
+            <button onclick="deleteProject('{{ current.name }}')" class="outline contrast" style="font-size:0.8rem;padding:0.2rem 0.5rem">🗑 Delete Project</button>
+            {% endif %}
+            <a href="/docs" class="outline" style="margin-left:auto">API Docs</a>
+        </nav>
+    </header>
+
+    {% if current %}
+    <div class="status-bar">
+        {% for status, count in counts.items() %}
+        <div><span class="count">{{ count }}</span> <span class="label">{{ status }}</span></div>
+        {% endfor %}
+    </div>
+
+    <div style="margin-bottom:1rem">
+        <button onclick="openNewTaskModal()" class="outline" style="font-size:0.85rem;padding:0.3rem 0.8rem">+ New Task</button>
+        <button onclick="openNewGoalModal()" class="outline" style="font-size:0.85rem;padding:0.3rem 0.8rem">+ Goal</button>
+        <input type="text" id="search-input" placeholder="🔍 Search tasks..." oninput="filterTasks(this.value)" style="display:inline-block;width:auto;margin-left:0.5rem;font-size:0.85rem;padding:0.3rem 0.6rem">
+    </div>
+
+    {% if goals %}
+    <details style="margin-bottom:1rem;font-size:0.85rem" {% if goals %}open{% endif %}>
+        <summary style="cursor:pointer;user-select:none;font-weight:600">🎯 Goals ({{ goals|length }})</summary>
+        <div style="padding:0.5rem 0;display:flex;flex-wrap:wrap;gap:0.5rem">
+            {% for g in goals %}
+            <div style="padding:0.4rem 0.8rem;border-radius:var(--pico-border-radius);border:1px solid var(--pico-border-color);display:flex;align-items:center;gap:0.5rem;{% if g.status.value == 'completed' %}opacity:0.5;text-decoration:line-through{% endif %}">
+                <span>{{ g.title }}</span>
+                <span style="font-size:0.7rem;color:var(--pico-muted-color)">({{ g.status.value }})</span>
+                {% if g.status.value == 'active' %}
+                <button onclick="completeGoal('{{ g.id }}')" class="outline" style="font-size:0.7rem;padding:0.1rem 0.3rem;margin:0">✓</button>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+
+    <details style="margin-bottom:1rem;font-size:0.8rem;color:var(--pico-muted-color)">
+        <summary style="cursor:pointer;user-select:none">📐 Drag rules (click to expand)</summary>
+        <div style="padding:0.5rem 0;line-height:1.6">
+            <strong>Drag between columns to change task status:</strong><br>
+            <span style="color:#2ecc71">✓</span> Planned → Active (activates task)<br>
+            <span style="color:#2ecc71">✓</span> Planned → Completed (opens complete modal)<br>
+            <span style="color:#2ecc71">✓</span> Planned → Cancelled<br>
+            <span style="color:#2ecc71">✓</span> Active → Blocked (asks for reason)<br>
+            <span style="color:#2ecc71">✓</span> Active → Completed (opens complete modal)<br>
+            <span style="color:#2ecc71">✓</span> Active → Cancelled<br>
+            <span style="color:#2ecc71">✓</span> Blocked → Active (unblocks)<br>
+            <span style="color:#2ecc71">✓</span> Blocked → Planned (resets)<br>
+            <span style="color:#2ecc71">✓</span> Blocked → Cancelled<br>
+            <span style="color:#2ecc71">✓</span> Completed → Planned (resets)<br>
+            <span style="color:#2ecc71">✓</span> Cancelled → Planned (resets)<br>
+            <span style="color:#2ecc71">✓</span> Reorder within any column<br>
+            <br>
+            <span style="color:var(--pico-danger)">✗</span> Planned → Blocked (must activate first)<br>
+            <span style="color:var(--pico-danger)">✗</span> Completed/Cancelled → Active/Blocked (must reset to Planned first)
+        </div>
+    </details>
+
+    <div class="columns">
+        <!-- Planned -->
+        <div class="column">
+            <h2>Planned <span class="badge">{{ tasks_by_status.get('planned', [])|length }}</span></h2>
+            <ul class="task-list" id="list-planned" data-status="planned">
+            {% for item in tasks_by_status.get('planned', []) %}
+                <li class="task-card" data-id="{{ item.task.id }}">
+                    <div class="task-title">{{ item.task.title }}</div>
+                    <div class="task-meta">
+                        <span class="task-id">#{{ item.task.id }}</span>
+                        <span class="priority">P:{{ item.task.priority }}</span>
+                        {% if item.task.assignee %}<span class="assignee">@{{ item.task.assignee }}</span>{% endif %}
+                        {% for tag in item.tags %}<span class="tag">{{ tag }}</span>{% endfor %}
+                    </div>
+                    {% if item.dep_details %}
+                    <div class="deps">
+                        depends on:
+                        {% for d in item.dep_details %}
+                            {% if d.status == 'completed' %}<span class="dep-met">#{{ d.id }} ✓</span>
+                            {% elif d.status == 'active' %}<span class="dep-active">#{{ d.id }} ▶</span>
+                            {% else %}<span class="dep-unmet">#{{ d.id }} ○</span>{% endif %}{% if not loop.last %}, {% endif %}
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    {% if item.task.body %}
+                    <div class="task-body">{{ item.task.body }}</div>
+                    {% endif %}
+                    <div class="task-actions">
+                        <button onclick="activateTask('{{ item.task.id }}')" class="secondary">▶ Activate</button>
+                        <button onclick="openDepsModal('{{ item.task.id }}', '{{ item.task.title }}')" class="outline">🔗 Deps</button>
+                        <button onclick="prioritizeTask('{{ item.task.id }}')" class="outline" title="Move to top">⬆ Top</button>
+                        <button onclick='openEditModal({{ item.task.id|tojson }}, {{ item.task.title|tojson }}, {{ item.task.body|tojson }}, {{ item.task.priority }}, {{ (item.task.assignee or "")|tojson }})'>✏ Edit</button>
+                        <button onclick="deleteTask('{{ item.task.id }}')" class="contrast">✕</button>
+                    </div>
+                </li>
+            {% endfor %}
+            </ul>
+        </div>
+
+        <!-- Active -->
+        <div class="column">
+            <h2>Active <span class="badge">{{ tasks_by_status.get('active', [])|length }}</span></h2>
+            <ul class="task-list" id="list-active" data-status="active">
+            {% for item in tasks_by_status.get('active', []) %}
+                <li class="task-card active-indicator" data-id="{{ item.task.id }}">
+                    <div class="task-title">{{ item.task.title }}</div>
+                    <div class="task-meta">
+                        <span class="task-id">#{{ item.task.id }}</span>
+                        <span class="priority">P:{{ item.task.priority }}</span>
+                        {% if item.task.assignee %}<span class="assignee">@{{ item.task.assignee }}</span>{% endif %}
+                    </div>
+                    {% if item.dep_details %}
+                    <div class="deps">
+                        depends on:
+                        {% for d in item.dep_details %}
+                            {% if d.status == 'completed' %}<span class="dep-met">#{{ d.id }} ✓</span>
+                            {% elif d.status == 'active' %}<span class="dep-active">#{{ d.id }} ▶</span>
+                            {% else %}<span class="dep-unmet">#{{ d.id }} ○</span>{% endif %}{% if not loop.last %}, {% endif %}
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    {% if item.task.body %}
+                    <div class="task-body">{{ item.task.body }}</div>
+                    {% endif %}
+                    <div class="task-actions">
+                        <button onclick="completeTask('{{ item.task.id }}')">✓ Complete</button>
+                        <button onclick="blockTask('{{ item.task.id }}')" class="secondary">⏸ Block</button>
+                        <button onclick="addLog('{{ item.task.id }}')" class="outline" title="Add log entry">📝 Log</button>
+                        <button onclick="cancelTask('{{ item.task.id }}')" class="contrast">✕ Cancel</button>
+                    </div>
+                </li>
+            {% endfor %}
+            </ul>
+        </div>
+
+        <!-- Blocked -->
+        <div class="column">
+            <h2>Blocked <span class="badge">{{ tasks_by_status.get('blocked', [])|length }}</span></h2>
+            <ul class="task-list" id="list-blocked" data-status="blocked">
+            {% for item in tasks_by_status.get('blocked', []) %}
+                <li class="task-card" data-id="{{ item.task.id }}" style="border-left: 3px solid var(--pico-danger);">
+                    <div class="task-title">{{ item.task.title }}</div>
+                    <div class="task-meta">
+                        <span class="task-id">#{{ item.task.id }}</span>
+                        {% if item.task.assignee %}<span class="assignee">@{{ item.task.assignee }}</span>{% endif %}
+                    </div>
+                    <div class="task-actions">
+                        <button onclick="activateTask('{{ item.task.id }}')" class="secondary">▶ Unblock</button>
+                        <button onclick="cancelTask('{{ item.task.id }}')" class="contrast">✕ Cancel</button>
+                    </div>
+                </li>
+            {% endfor %}
+            </ul>
+        </div>
+
+        <!-- Completed -->
+        <div class="column">
+            <h2>Completed <span class="badge">{{ tasks_by_status.get('completed', [])|length }}</span></h2>
+            <ul class="task-list" id="list-completed" data-status="completed">
+            {% for item in tasks_by_status.get('completed', []) %}
+                <li class="task-card" data-id="{{ item.task.id }}" style="opacity:0.6">
+                    <div class="task-title">{{ item.task.title }}</div>
+                    <div class="task-meta">
+                        <span class="task-id">#{{ item.task.id }}</span>
+                        {% if item.task.assignee %}<span class="assignee">@{{ item.task.assignee }}</span>{% endif %}
+                    </div>
+                </li>
+            {% endfor %}
+            </ul>
+        </div>
+
+        <!-- Cancelled -->
+        <div class="column">
+            <h2>Cancelled <span class="badge">{{ tasks_by_status.get('cancelled', [])|length }}</span></h2>
+            <ul class="task-list" id="list-cancelled" data-status="cancelled">
+            {% for item in tasks_by_status.get('cancelled', []) %}
+                <li class="task-card" data-id="{{ item.task.id }}" style="opacity:0.4; text-decoration: line-through;">
+                    <div class="task-title">{{ item.task.title }}</div>
+                </li>
+            {% endfor %}
+            </ul>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- New Task Modal -->
+    <div class="modal-overlay" id="new-task-modal">
+        <div class="modal">
+            <h3>New Task</h3>
+            <label>Title <input type="text" id="new-title" required></label>
+            <label>Body <textarea id="new-body" placeholder="Task instructions..."></textarea></label>
+            <label>Priority <input type="number" id="new-priority" value="5" min="1" max="10"></label>
+            <label>Assignee <input type="text" id="new-assignee" placeholder="profile name"></label>
+            <label>Tags (comma-separated) <input type="text" id="new-tags" placeholder="milestone, step-1"></label>
+            <div style="display:flex;gap:0.5rem;margin-top:1rem">
+                <button onclick="createTask()">Create</button>
+                <button onclick="closeModal('new-task-modal')" class="outline">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Task Modal -->
+    <div class="modal-overlay" id="edit-task-modal">
+        <div class="modal">
+            <h3>Edit Task</h3>
+            <input type="hidden" id="edit-id">
+            <label>Title <input type="text" id="edit-title" required></label>
+            <label>Body <textarea id="edit-body"></textarea></label>
+            <label>Priority <input type="number" id="edit-priority" min="1" max="10"></label>
+            <label>Assignee <input type="text" id="edit-assignee"></label>
+            <div style="display:flex;gap:0.5rem;margin-top:1rem">
+                <button onclick="saveEdit()">Save</button>
+                <button onclick="closeModal('edit-task-modal')" class="outline">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Complete Modal -->
+    <div class="modal-overlay" id="complete-modal">
+        <div class="modal">
+            <h3>Complete Task</h3>
+            <input type="hidden" id="complete-id">
+            <label>Result summary <textarea id="complete-result" placeholder="What was done?"></textarea></label>
+            <div style="display:flex;gap:0.5rem;margin-top:1rem">
+                <button onclick="confirmComplete()">Complete</button>
+                <button onclick="closeModal('complete-modal'); reload()" class="outline">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Dependencies Modal -->
+    <div class="modal-overlay" id="deps-modal">
+        <div class="modal">
+            <h3>Dependencies <span id="deps-task-title" style="font-size:0.85rem;color:var(--pico-muted-color)"></span></h3>
+            <input type="hidden" id="deps-task-id">
+            <div id="deps-current" style="margin-bottom:1rem">
+                <label style="font-size:0.85rem;font-weight:600">Current dependencies:</label>
+                <div id="deps-list" style="font-size:0.85rem;padding:0.3rem 0"></div>
+            </div>
+            <div style="margin-bottom:1rem">
+                <label style="font-size:0.85rem;font-weight:600">Add dependency:</label>
+                <div style="display:flex;gap:0.5rem">
+                    <input type="text" id="deps-input" placeholder="Enter task ID" style="flex:1;font-size:0.85rem">
+                    <button onclick="addDep()" style="font-size:0.85rem;padding:0.3rem 0.8rem">+ Add</button>
+                </div>
+            </div>
+            <div>
+                <label style="font-size:0.85rem;font-weight:600">Available tasks:</label>
+                <div id="deps-available" style="font-size:0.85rem;max-height:150px;overflow-y:auto;padding:0.3rem 0"></div>
+            </div>
+            <div style="margin-top:1rem">
+                <button onclick="closeModal('deps-modal')" class="outline">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Goal Modal -->
+    <div class="modal-overlay" id="new-goal-modal">
+        <div class="modal">
+            <h3>New Goal</h3>
+            <label>Title <input type="text" id="new-goal-title" required placeholder="e.g. Ship MVP"></label>
+            <div style="display:flex;gap:0.5rem;margin-top:1rem">
+                <button onclick="createGoal()">Create</button>
+                <button onclick="closeModal('new-goal-modal')" class="outline">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Project Modal -->
+    <div class="modal-overlay" id="new-project-modal">
+        <div class="modal">
+            <h3>New Project</h3>
+            <label>Name <input type="text" id="new-project-name" required placeholder="my-project"></label>
+            <label>Description <textarea id="new-project-desc" placeholder="Project description..."></textarea></label>
+            <div style="display:flex;gap:0.5rem;margin-top:1rem">
+                <button onclick="createProject()">Create</button>
+                <button onclick="closeModal('new-project-modal')" class="outline">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast"></div>
+
+    {% set project_name = current.name if current else "" %}
+    <script>
+    const PROJECT = "{{ project_name }}";
+
+    // ─── Toast ──────────────────────────────────────────────────────────
+    function toast(msg, isError) {
+        const el = document.getElementById('toast');
+        el.textContent = msg;
+        el.className = 'show' + (isError ? ' toast-error' : '');
+        setTimeout(() => el.className = '', isError ? 4000 : 2000);
+    }
+
+    // ─── Project actions ──────────────────────────────────────────────
+    function openNewProjectModal() {
+        document.getElementById('new-project-name').value = '';
+        document.getElementById('new-project-desc').value = '';
+        document.getElementById('new-project-modal').classList.add('active');
+        document.getElementById('new-project-name').focus();
+    }
+
+    async function createProject() {
+        const name = document.getElementById('new-project-name').value.trim();
+        if (!name) return toast('Project name required');
+        try {
+            const res = await api('POST', '/api/projects', {
+                name,
+                description: document.getElementById('new-project-desc').value,
+            });
+            closeModal('new-project-modal');
+            toast('Project created');
+            window.location.href = `/?project=${res.name}`;
+        } catch (e) { toast('⚠ ' + e.message, true); }
+    }
+
+    async function deleteProject(name) {
+        if (!confirm(`Delete project "${name}" and ALL its tasks? This cannot be undone.`)) return;
+        try {
+            await api('DELETE', `/api/projects/${name}`);
+            toast('Project deleted');
+            window.location.href = '/';
+        } catch (e) { toast('⚠ ' + e.message, true); }
+    }
+
+    // ─── Dependency actions ─────────────────────────────────────────────
+    async function openDepsModal(taskId, taskTitle) {
+        document.getElementById('deps-task-id').value = taskId;
+        document.getElementById('deps-task-title').textContent = `— ${taskTitle} #${taskId}`;
+        document.getElementById('deps-input').value = '';
+
+        // Fetch current task details for deps
+        try {
+            const task = await api('GET', `/api/tasks/${taskId}`);
+            const depsList = document.getElementById('deps-list');
+            if (!task.depends_on || task.depends_on.length === 0) {
+                depsList.innerHTML = '<span style="color:var(--pico-muted-color)">No dependencies</span>';
+            } else {
+                depsList.innerHTML = task.depends_on.map(depId =>
+                    `<div style="display:flex;align-items:center;gap:0.5rem;margin:0.2rem 0">
+                        <span style="font-family:monospace">#${depId}</span>
+                        <button onclick="removeDep('${taskId}', '${depId}')" class="outline contrast" style="font-size:0.7rem;padding:0.1rem 0.4rem;margin:0">✕ remove</button>
+                    </div>`
+                ).join('');
+            }
+
+            // Fetch available tasks in the project
+            const allTasks = await api('GET', `/api/projects/${PROJECT}/tasks?limit=100`);
+            const available = allTasks.filter(t => t.id !== taskId);
+            const availDiv = document.getElementById('deps-available');
+            if (available.length === 0) {
+                availDiv.innerHTML = '<span style="color:var(--pico-muted-color)">No other tasks in project</span>';
+            } else {
+                availDiv.innerHTML = available.map(t =>
+                    `<div style="display:flex;align-items:center;gap:0.5rem;margin:0.15rem 0;cursor:pointer"
+                          onclick="document.getElementById('deps-input').value='${t.id}'">
+                        <span style="font-family:monospace">#${t.id}</span>
+                        <span>${t.title}</span>
+                        <span style="color:var(--pico-muted-color);font-size:0.75rem">(${t.status})</span>
+                    </div>`
+                ).join('');
+            }
+
+            document.getElementById('deps-modal').classList.add('active');
+        } catch (e) { toast('⚠ ' + e.message, true); }
+    }
+
+    async function addDep() {
+        const taskId = document.getElementById('deps-task-id').value;
+        const depId = document.getElementById('deps-input').value.trim();
+        if (!depId) return toast('Enter a task ID');
+        try {
+            await api('POST', `/api/tasks/${taskId}/deps`, { depends_on: depId });
+            toast('Dependency added');
+            openDepsModal(taskId, document.getElementById('deps-task-title').textContent.replace('— ', '').split(' #')[0]);
+        } catch (e) { toast('⚠ ' + e.message, true); }
+    }
+
+    async function removeDep(taskId, depId) {
+        try {
+            await api('DELETE', `/api/tasks/${taskId}/deps/${depId}`);
+            toast('Dependency removed');
+            openDepsModal(taskId, document.getElementById('deps-task-title').textContent.replace('— ', '').split(' #')[0]);
+        } catch (e) { toast('⚠ ' + e.message, true); }
+    }
+
+    // ─── Modals ─────────────────────────────────────────────────────────
+    function openNewTaskModal() {
+        document.getElementById('new-title').value = '';
+        document.getElementById('new-body').value = '';
+        document.getElementById('new-priority').value = '5';
+        document.getElementById('new-assignee').value = '';
+        document.getElementById('new-tags').value = '';
+        document.getElementById('new-task-modal').classList.add('active');
+        document.getElementById('new-title').focus();
+    }
+
+    function openEditModal(id, title, body, priority, assignee) {
+        document.getElementById('edit-id').value = id;
+        document.getElementById('edit-title').value = title;
+        document.getElementById('edit-body').value = body;
+        document.getElementById('edit-priority').value = priority;
+        document.getElementById('edit-assignee').value = assignee;
+        document.getElementById('edit-task-modal').classList.add('active');
+    }
+
+    function openCompleteModal(id) {
+        document.getElementById('complete-id').value = id;
+        document.getElementById('complete-result').value = '';
+        document.getElementById('complete-modal').classList.add('active');
+        document.getElementById('complete-result').focus();
+    }
+
+    function closeModal(id) {
+        document.getElementById(id).classList.remove('active');
+    }
+
+    // Close modals on overlay click
+    document.querySelectorAll('.modal-overlay').forEach(el => {
+        el.addEventListener('click', (e) => {
+            if (e.target === el) el.classList.remove('active');
+        });
+    });
+
+    // ─── API helpers ────────────────────────────────────────────────────
+    async function api(method, path, body) {
+        const opts = { method, headers: {'Content-Type': 'application/json'} };
+        if (body) opts.body = JSON.stringify(body);
+        const res = await fetch(path, opts);
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({error: res.statusText}));
+            throw new Error(err.error || err.detail || 'Request failed');
+        }
+        return res.json();
+    }
+
+    // ─── Goal actions ─────────────────────────────────────────────────
+    function openNewGoalModal() {
+        document.getElementById('new-goal-title').value = '';
+        document.getElementById('new-goal-modal').classList.add('active');
+        document.getElementById('new-goal-title').focus();
+    }
+
+    async function createGoal() {
+        const title = document.getElementById('new-goal-title').value.trim();
+        if (!title) return toast('Goal title required');
+        try {
+            await api('POST', `/api/projects/${PROJECT}/goals`, { title });
+            closeModal('new-goal-modal');
+            toast('Goal created');
+            reload();
+        } catch (e) { toast('⚠ ' + e.message, true); }
+    }
+
+    async function completeGoal(goalId) {
+        try {
+            await api('POST', `/api/goals/${goalId}/complete`);
+            toast('Goal completed');
+            reload();
+        } catch (e) { toast('⚠ ' + e.message, true); }
+    }
+
+    // ─── Search ──────────────────────────────────────────────────────
+    function filterTasks(query) {
+        const q = query.toLowerCase();
+        document.querySelectorAll('.task-card').forEach(card => {
+            const title = card.querySelector('.task-title')?.textContent?.toLowerCase() || '';
+            const id = card.dataset.id?.toLowerCase() || '';
+            const body = card.querySelector('.task-body')?.textContent?.toLowerCase() || '';
+            const match = !q || title.includes(q) || id.includes(q) || body.includes(q);
+            card.style.display = match ? '' : 'none';
+        });
+    }
+
+    // ─── Prioritize & Log ────────────────────────────────────────────
+    async function prioritizeTask(id) {
+        try {
+            await api('PUT', `/api/tasks/${id}/reorder`, { position: 0 });
+            toast('Moved to top');
+            reload();
+        } catch (e) { toast('⚠ ' + e.message, true); }
+    }
+
+    async function addLog(id) {
+        const msg = prompt('Log message:');
+        if (!msg) return;
+        try {
+            await api('POST', `/api/tasks/${id}/log`, { message: msg });
+            toast('Logged');
+        } catch (e) { toast('⚠ ' + e.message, true); }
+    }
+
+    // ─── Task actions ──────────────────────────────────────────────────
+    async function createTask() {
+        const title = document.getElementById('new-title').value.trim();
+        if (!title) return toast('Title required');
+        const tags = document.getElementById('new-tags').value.split(',').map(s => s.trim()).filter(Boolean);
+        try {
+            await api('POST', '/api/tasks', {
+                project: PROJECT,
+                title,
+                body: document.getElementById('new-body').value,
+                priority: parseInt(document.getElementById('new-priority').value) || 5,
+                assignee: document.getElementById('new-assignee').value || null,
+                tags,
+            });
+            closeModal('new-task-modal');
+            toast('Task created');
+            reload();
+        } catch (e) { toast('⚠ ' + e.message, true); }
+    }
+
+    async function saveEdit() {
+        const id = document.getElementById('edit-id').value;
+        try {
+            await api('PUT', `/api/tasks/${id}`, {
+                title: document.getElementById('edit-title').value,
+                body: document.getElementById('edit-body').value,
+                priority: parseInt(document.getElementById('edit-priority').value),
+                assignee: document.getElementById('edit-assignee').value || null,
+            });
+            closeModal('edit-task-modal');
+            toast('Task updated');
+            reload();
+        } catch (e) { toast('⚠ ' + e.message, true); }
+    }
+
+    async function activateTask(id) {
+        try {
+            await api('POST', `/api/tasks/${id}/activate`);
+            toast('Task activated');
+            reload();
+        } catch (e) { toast('⚠ ' + e.message, true); }
+    }
+
+    function completeTask(id) { openCompleteModal(id); }
+
+    async function confirmComplete() {
+        const id = document.getElementById('complete-id').value;
+        try {
+            await api('POST', `/api/tasks/${id}/complete`, {
+                result: document.getElementById('complete-result').value,
+            });
+            closeModal('complete-modal');
+            toast('Task completed');
+            reload();
+        } catch (e) { toast('⚠ ' + e.message, true); }
+    }
+
+    async function blockTask(id) {
+        const reason = prompt('Block reason (optional):');
+        try {
+            await api('POST', `/api/tasks/${id}/block`, { reason: reason || '' });
+            toast('Task blocked');
+            reload();
+        } catch (e) { toast('⚠ ' + e.message, true); }
+    }
+
+    async function cancelTask(id) {
+        if (!confirm('Cancel this task?')) return;
+        try {
+            await api('POST', `/api/tasks/${id}/cancel`);
+            toast('Task cancelled');
+            reload();
+        } catch (e) { toast('⚠ ' + e.message, true); }
+    }
+
+    async function deleteTask(id) {
+        if (!confirm('Delete this planned task?')) return;
+        try {
+            await api('DELETE', `/api/tasks/${id}`);
+            toast('Task deleted');
+            reload();
+        } catch (e) { toast('⚠ ' + e.message, true); }
+    }
+
+    // ─── SortableJS (drag-and-drop reorder) ─────────────────────────────
+    function initSortable() {
+        document.querySelectorAll('.task-list').forEach(list => {
+            new Sortable(list, {
+                group: 'tasks',
+                animation: 150,
+                ghostClass: 'sortable-ghost',
+                dragClass: 'sortable-drag',
+                onEnd: async function(evt) {
+                    const taskId = evt.item.dataset.id;
+                    const fromStatus = evt.from.dataset.status;
+                    const toStatus = evt.to.dataset.status;
+                    const newIndex = evt.newIndex;
+
+                    try {
+                        if (fromStatus === toStatus) {
+                            // Same column — just reorder
+                            await api('PUT', `/api/tasks/${taskId}/reorder`, { position: newIndex });
+                            toast('Reordered');
+                        } else {
+                            // Cross-column — do status transition
+                            if (toStatus === 'planned') {
+                                await api('POST', `/api/tasks/${taskId}/reset`);
+                                toast('Moved to planned');
+                            } else if (toStatus === 'active') {
+                                if (fromStatus === 'blocked') {
+                                    await api('POST', `/api/tasks/${taskId}/unblock`);
+                                    toast('Unblocked');
+                                } else {
+                                    const res = await api('POST', `/api/tasks/${taskId}/activate`);
+                                    if (res.activated && res.activated.length) {
+                                        toast(`Activated + ${res.activated.length} auto-activated`);
+                                    } else {
+                                        toast('Activated');
+                                    }
+                                }
+                            } else if (toStatus === 'completed') {
+                                openCompleteModal(taskId);
+                                return;
+                            } else if (toStatus === 'blocked') {
+                                const reason = prompt('Block reason (optional):') || '';
+                                await api('POST', `/api/tasks/${taskId}/block`, { reason });
+                                toast('Blocked');
+                            } else if (toStatus === 'cancelled') {
+                                await api('POST', `/api/tasks/${taskId}/cancel`);
+                                toast('Cancelled');
+                            }
+                            reload();
+                        }
+                    } catch (e) {
+                        const msg = e.message || 'Unknown error';
+                        // Show user-friendly error messages
+                        if (msg.includes('deps unmet')) {
+                            toast('⚠ Dependencies not met — complete dependent tasks first', true);
+                        } else if (msg.includes('not active')) {
+                            toast('⚠ Task must be Active first', true);
+                        } else if (msg.includes('not planned')) {
+                            toast('⚠ Task must be Planned first', true);
+                        } else if (msg.includes('not blocked')) {
+                            toast('⚠ Task is not Blocked', true);
+                        } else if (msg.includes('not found')) {
+                            toast('⚠ Task not found', true);
+                        } else {
+                            toast('⚠ ' + msg, true);
+                        }
+                        reload();
+                    }
+                }
+            });
+        });
+    }
+
+    function reload() { window.location.reload(); }
+
+    // ─── Init ──────────────────────────────────────────────────────────
+    initSortable();
+
+    // Keyboard shortcut: Escape closes modals
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
+        }
+    });
+    </script>
+</body>
+</html>

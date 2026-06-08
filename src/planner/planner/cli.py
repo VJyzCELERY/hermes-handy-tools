@@ -137,6 +137,19 @@ def project_archive(ctx, name):
             sys.exit(1)
 
 
+@project.command("delete")
+@click.argument("name")
+@click.pass_context
+def project_delete(ctx, name):
+    """Delete a project and all its tasks (permanent)."""
+    with get_db(ctx.obj["db_path"]) as db:
+        if db.delete_project(name):
+            output(f"Deleted: {name}", **_flags(ctx))
+        else:
+            output(f"Project not found: {name}", **_flags(ctx))
+            sys.exit(1)
+
+
 # ─── Goal ─────────────────────────────────────────────────────────────────────
 
 @main.group()
@@ -344,9 +357,12 @@ def task_complete(ctx, result):
 
         from planner.models import Task
         t = Task(**dict(rows[0]))
-        completed = db.complete_task(t.id, result)
+        completed, activated = db.complete_task(t.id, result)
         if completed:
             output(f"Completed: [{completed.id}] {completed.title}", **_flags(ctx))
+            if activated:
+                for a in activated:
+                    output(f"  Auto-activated: [{a.id}] {a.title}", **_flags(ctx))
         else:
             output("Failed to complete task.", **_flags(ctx))
             sys.exit(1)
@@ -372,6 +388,20 @@ def task_block(ctx, reason):
             output(f"Blocked: [{blocked.id}] {blocked.title}", **_flags(ctx))
         else:
             output("Failed to block task.", **_flags(ctx))
+            sys.exit(1)
+
+
+@task.command("unblock")
+@click.argument("task_id")
+@click.pass_context
+def task_unblock(ctx, task_id):
+    """Unblock a blocked task (move back to active)."""
+    with get_db(ctx.obj["db_path"]) as db:
+        unblocked = db.unblock_task(task_id)
+        if unblocked:
+            output(f"Unblocked: [{unblocked.id}] {unblocked.title}", **_flags(ctx))
+        else:
+            output("Failed to unblock (task not blocked?).", **_flags(ctx))
             sys.exit(1)
 
 
@@ -644,6 +674,28 @@ def dispatch(ctx, project_name, profile):
                 output(f"TAGS: {', '.join(tags)}", **_flags(ctx))
             if task.body:
                 output(f"\nBODY:\n{task.body}", **_flags(ctx))
+
+
+# ─── Web UI ──────────────────────────────────────────────────────────────────
+
+@main.command("web")
+@click.option("--host", default="127.0.0.1", help="Bind host")
+@click.option("--port", default=7749, type=int, help="Port (default: 7749)")
+@click.option("--reload", is_flag=True, help="Auto-reload on code changes")
+def web(host, port, reload):
+    """Start the web dashboard."""
+    try:
+        import uvicorn
+    except ImportError:
+        click.echo("uvicorn not installed. Run: uv sync", err=True)
+        sys.exit(1)
+
+    uvicorn.run(
+        "planner.web.app:app",
+        host=host,
+        port=port,
+        reload=reload,
+    )
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
