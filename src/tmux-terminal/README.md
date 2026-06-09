@@ -135,8 +135,10 @@ Every tool call is logged to `~/.hermes/logs/tmux-terminal-sessions.tsv`:
 
 ```
 session_id    command    start_time    status    workdir    pid
-hermes-112036e5    echo hello    1780997862.4    completed    /path/to/workdir
+hermes-abc12345    echo hello    1780997862.4    completed    /path/to/workdir
 ```
+
+**Session naming:** `hermes-{tool_call_id[:8]}` — derived from the Hermes tool call ID so each tmux session traces back to the exact tool call that created it. Falls back to `task_id` or random UUID if context is unavailable.
 
 **Status values:** `running` → `completed` | `failed` | `timeout` | `orphaned`
 

@@ -30,6 +30,37 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Tool call ID resolution
+# ---------------------------------------------------------------------------
+
+def _resolve_session_id(kw: dict) -> str:
+    """Resolve a tmux session ID from the tool call context.
+
+    Priority:
+    1. tool_call_id from Hermes ContextVar (unique per tool call)
+    2. task_id from kw (session-level identifier)
+    3. Random UUID fallback (for tests / outside Hermes)
+
+    Format: hermes-{id[:8]}  (tmux session names must be short)
+    """
+    # Try ContextVar first (set by Hermes during tool dispatch)
+    try:
+        from tools.approval import _approval_tool_call_id
+        tc_id = _approval_tool_call_id.get()
+        if tc_id:
+            return f"hermes-{tc_id[:8]}"
+    except (ImportError, LookupError):
+        pass
+
+    # Fall back to task_id from kwargs
+    task_id = kw.get("task_id") or ""
+    if task_id:
+        return f"hermes-{task_id[:8]}"
+
+    # Last resort: random UUID
+    return f"hermes-{uuid.uuid4().hex[:8]}"
+
+# ---------------------------------------------------------------------------
 # Session tracking & orphan detection
 # ---------------------------------------------------------------------------
 
@@ -355,13 +386,14 @@ def _run_tmux_command(
     command: str,
     timeout: int = 600,
     workdir: str | None = None,
+    kw: dict | None = None,
 ) -> str:
     """
     Run a command in an ephemeral tmux session (foreground).
 
     Returns JSON with output, exit_code, and optional error.
     """
-    session = f"hermes-{uuid.uuid4().hex[:8]}"
+    session = _resolve_session_id(kw or {})
     outfile = f"/tmp/tmux-output-{session}"
     cwd = workdir or os.getcwd()
 
@@ -449,6 +481,7 @@ def _run_tmux_command(
 def _build_bg_command(
     command: str,
     workdir: str | None = None,
+    kw: dict | None = None,
 ) -> str:
     """
     Build a self-contained bash command string for background execution.
@@ -457,7 +490,7 @@ def _build_bg_command(
     output, and exits. When this shell process exits, Hermes detects it
     and fires notify_on_complete.
     """
-    session = f"hermes-{uuid.uuid4().hex[:8]}"
+    session = _resolve_session_id(kw or {})
     outfile = f"/tmp/tmux-output-{session}"
     cwd = workdir or os.getcwd()
 
@@ -561,6 +594,7 @@ def _handle_tmux_terminal(args, **kw):
         bg_cmd = _build_bg_command(
             command=command,
             workdir=args.get("workdir"),
+            kw=kw,
         )
         # Track the background session (using a generated ID since the actual
         # tmux session ID is created inside the wrapper script)
@@ -598,12 +632,14 @@ def _handle_tmux_terminal(args, **kw):
                 command=command,
                 timeout=args.get("timeout", 600),
                 workdir=args.get("workdir"),
+                kw=kw,
             )
     else:
         return _run_tmux_command(
             command=command,
             timeout=args.get("timeout", 600),
             workdir=args.get("workdir"),
+            kw=kw,
         )
 
 
