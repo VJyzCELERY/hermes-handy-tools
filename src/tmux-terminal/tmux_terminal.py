@@ -481,7 +481,7 @@ def _run_tmux_command(
 def _build_bg_command(
     command: str,
     workdir: str | None = None,
-    kw: dict | None = None,
+    session_id: str | None = None,
 ) -> str:
     """
     Build a self-contained bash command string for background execution.
@@ -489,8 +489,12 @@ def _build_bg_command(
     The command creates a tmux session, runs the user command, captures
     output, and exits. When this shell process exits, Hermes detects it
     and fires notify_on_complete.
+
+    Args:
+        session_id: Pre-resolved tmux session name. Must match the ID
+                    used for tracking so orphan detection works correctly.
     """
-    session = _resolve_session_id(kw or {})
+    session = session_id or f"hermes-{uuid.uuid4().hex[:8]}"
     outfile = f"/tmp/tmux-output-{session}"
     cwd = workdir or os.getcwd()
 
@@ -591,14 +595,14 @@ def _handle_tmux_terminal(args, **kw):
         # Background mode: build a command string and delegate to
         # process_registry. The wrapper script IS the process — when the
         # tmux command finishes, the script exits, and Hermes notifies.
+        # Resolve session ID ONCE — used for both tracking AND the actual
+        # tmux session so orphan detection can match them correctly.
+        bg_session_id = _resolve_session_id(kw)
         bg_cmd = _build_bg_command(
             command=command,
             workdir=args.get("workdir"),
-            kw=kw,
+            session_id=bg_session_id,
         )
-        # Track the background session (using a generated ID since the actual
-        # tmux session ID is created inside the wrapper script)
-        bg_session_id = f"hermes-bg-{uuid.uuid4().hex[:8]}"
         _track_start(bg_session_id, command, args.get("workdir") or os.getcwd())
         try:
             from tools.process_registry import process_registry
