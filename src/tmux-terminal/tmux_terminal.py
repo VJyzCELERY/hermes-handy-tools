@@ -187,6 +187,30 @@ def _cleanup_orphans() -> list[str]:
             if session_name in orphans:
                 try:
                     os.unlink(f)
+                    _log_event(session_name, "cleanup", f"removed output file {f}")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # Also clean up output files for completed/failed sessions (older than 1 hour)
+    try:
+        import glob
+        for f in glob.glob("/tmp/tmux-output-hermes-*"):
+            session_name = f.replace("/tmp/tmux-output-", "")
+            # Check if this session is in tracking as completed/failed
+            if _TRACKING_FILE.exists():
+                try:
+                    for line in _TRACKING_FILE.read_text().splitlines():
+                        parts = line.split("\t")
+                        if len(parts) >= 4 and parts[0] == session_name:
+                            if parts[3] in ("completed", "failed", "timeout"):
+                                try:
+                                    start_time = float(parts[2])
+                                    if time.time() - start_time > 3600:
+                                        os.unlink(f)
+                                except (ValueError, OSError):
+                                    pass
                 except Exception:
                     pass
     except Exception:
@@ -345,6 +369,7 @@ OUTFILE="{outfile}"
 CWD="{cwd}"
 COMMAND=$(cat {cmd_file})
 ENVFILE="{env_file}"
+KEEP_OUTPUT="{keep_output}"
 
 # Create tmux session with large terminal dimensions
 tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$CWD"
@@ -370,7 +395,12 @@ cat "$OUTFILE"
 
 # Cleanup
 tmux kill-session -t "$SESSION" 2>/dev/null || true
-rm -f "$OUTFILE" "{cmd_file}" "$ENVFILE"
+# In background mode, keep the output file so it can be read later.
+# Orphan detection will clean it up when the session is no longer tracked.
+if [ "$KEEP_OUTPUT" != "true" ]; then
+    rm -f "$OUTFILE"
+fi
+rm -f "{cmd_file}" "$ENVFILE"
 """
 
 
@@ -414,6 +444,7 @@ def _run_tmux_command(
         cwd=cwd,
         cmd_file=cmd_file,
         env_file=env_file,
+        keep_output="false",
     )
     script_file = _write_file(script, prefix="hermes-tmux-wrap-", suffix=".sh")
     os.chmod(script_file, 0o755)
@@ -511,6 +542,7 @@ def _build_bg_command(
         cwd=cwd,
         cmd_file=cmd_file,
         env_file=env_file,
+        keep_output="true",
     )
     script_file = _write_file(script, prefix="hermes-tmux-wrap-", suffix=".sh")
     os.chmod(script_file, 0o755)
