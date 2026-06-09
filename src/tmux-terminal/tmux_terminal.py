@@ -22,10 +22,169 @@ import os
 import shlex
 import subprocess
 import tempfile
+import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Session tracking & orphan detection
+# ---------------------------------------------------------------------------
+
+# Tracking file: records every tmux session this tool creates.
+# Format per line: session_id\tcommand\tstart_time\tstatus\tworkdir\tpid
+# Status: running | completed | failed | orphaned | timeout
+_TRACKING_DIR = Path.home() / ".hermes" / "logs"
+_TRACKING_FILE = _TRACKING_DIR / "tmux-terminal-sessions.tsv"
+_LOG_FILE = _TRACKING_DIR / "tmux-terminal.log"
+
+
+def _ensure_tracking_dir() -> None:
+    """Create the tracking directory if it doesn't exist."""
+    _TRACKING_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _log_event(session_id: str, action: str, details: str = "") -> None:
+    """Append a timestamped log entry to the log file."""
+    _ensure_tracking_dir()
+    ts = datetime.now(timezone.utc).isoformat()
+    line = f"[{ts}] [{session_id}] [{action}] {details}\n"
+    try:
+        with open(_LOG_FILE, "a") as f:
+            f.write(line)
+    except Exception:
+        pass  # best-effort logging
+
+
+def _track_start(session_id: str, command: str, workdir: str) -> None:
+    """Record a tmux session as running in the tracking file."""
+    _ensure_tracking_dir()
+    _log_event(session_id, "start", f"cmd={command[:200]} workdir={workdir}")
+    try:
+        with open(_TRACKING_FILE, "a") as f:
+            f.write(f"{session_id}\t{command[:500]}\t{time.time()}\trunning\t{workdir}\t\n")
+    except Exception:
+        pass
+
+
+def _track_update(session_id: str, status: str, pid: str = "") -> None:
+    """Update the status of a tracked session."""
+    _log_event(session_id, status)
+    if not _TRACKING_FILE.exists():
+        return
+    try:
+        lines = _TRACKING_FILE.read_text().splitlines()
+        updated = []
+        for line in lines:
+            parts = line.split("\t")
+            if len(parts) >= 6 and parts[0] == session_id:
+                parts[3] = status
+                if pid:
+                    parts[5] = pid
+                updated.append("\t".join(parts))
+            else:
+                updated.append(line)
+        _TRACKING_FILE.write_text("\n".join(updated) + "\n")
+    except Exception:
+        pass
+
+
+def _cleanup_orphans() -> list[str]:
+    """Find and kill orphaned hermes-* tmux sessions.
+
+    An orphan is a tmux session matching 'hermes-*' that is NOT in the
+    tracking file as 'running'. This happens when:
+    - Hermes was interrupted (WSL shutdown, crash, OOM kill)
+    - A subagent was killed mid-command
+    - The wrapper script died but the tmux session survived
+
+    Returns list of killed session IDs.
+    """
+    _ensure_tracking_dir()
+
+    # Get all live hermes-* tmux sessions
+    try:
+        result = subprocess.run(
+            ["tmux", "list-sessions", "-F", "#{session_name}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        live_sessions = set()
+        for line in result.stdout.splitlines():
+            name = line.strip()
+            if name.startswith("hermes-"):
+                live_sessions.add(name)
+    except Exception:
+        return []
+
+    if not live_sessions:
+        return []
+
+    # Read tracking file to find which sessions are "running"
+    running_sessions = set()
+    if _TRACKING_FILE.exists():
+        try:
+            for line in _TRACKING_FILE.read_text().splitlines():
+                parts = line.split("\t")
+                if len(parts) >= 4 and parts[3] == "running":
+                    running_sessions.add(parts[0])
+        except Exception:
+            pass
+
+    # Orphans = live sessions that are NOT tracked as running
+    orphans = live_sessions - running_sessions
+
+    killed = []
+    for orphan in orphans:
+        try:
+            subprocess.run(
+                ["tmux", "kill-session", "-t", orphan],
+                capture_output=True, timeout=5,
+            )
+            _log_event(orphan, "orphan_kill", f"detected at cleanup, not in tracking file")
+            killed.append(orphan)
+        except Exception:
+            pass
+
+    # Also clean up orphaned temp output files
+    try:
+        import glob
+        for f in glob.glob("/tmp/tmux-output-hermes-*"):
+            # Check if the session part is an orphan
+            session_name = f.replace("/tmp/tmux-output-", "")
+            if session_name in orphans:
+                try:
+                    os.unlink(f)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # Also clean up orphaned tracking entries for sessions that no longer exist
+    if _TRACKING_FILE.exists():
+        try:
+            lines = _TRACKING_FILE.read_text().splitlines()
+            cleaned = []
+            for line in lines:
+                parts = line.split("\t")
+                if len(parts) >= 4:
+                    sid = parts[0]
+                    status = parts[3]
+                    # Remove completed/failed entries older than 1 hour
+                    if status in ("completed", "failed", "orphaned", "timeout"):
+                        try:
+                            start_time = float(parts[2])
+                            if time.time() - start_time > 3600:
+                                continue  # skip old entries
+                        except (ValueError, IndexError):
+                            pass
+                cleaned.append(line)
+            _TRACKING_FILE.write_text("\n".join(cleaned) + "\n")
+        except Exception:
+            pass
+
+    return killed
 
 # ---------------------------------------------------------------------------
 # Hermes environment inheritance
@@ -206,6 +365,9 @@ def _run_tmux_command(
     outfile = f"/tmp/tmux-output-{session}"
     cwd = workdir or os.getcwd()
 
+    # Track this session
+    _track_start(session, command, cwd)
+
     # Write command to a temp file (avoids all quoting issues)
     cmd_file = _write_file(command, prefix="hermes-tmux-cmd-", suffix=".sh")
 
@@ -243,10 +405,12 @@ def _run_tmux_command(
                 exit_code = int(parts[1].strip())
             except ValueError:
                 pass
+            _track_update(session, "completed")
         else:
             output = stdout.rstrip("\n")
             if result.returncode != 0 and not output:
                 error = result.stderr.rstrip("\n") if result.stderr else "Command failed"
+            _track_update(session, "failed" if result.returncode != 0 else "completed")
 
         return json.dumps({
             "output": output,
@@ -260,12 +424,14 @@ def _run_tmux_command(
             ["tmux", "kill-session", "-t", session],
             capture_output=True, timeout=5,
         )
+        _track_update(session, "timeout")
         return json.dumps({
             "output": "",
             "exit_code": -1,
             "error": f"Timed out after {timeout}s",
         })
     except Exception as e:
+        _track_update(session, "failed")
         return json.dumps({
             "output": "",
             "exit_code": -1,
@@ -377,6 +543,11 @@ TMUX_TERMINAL_SCHEMA = {
 
 def _handle_tmux_terminal(args, **kw):
     """Dispatch handler for the tmux_terminal tool."""
+    # Run orphan cleanup on every call (cheap — just checks tmux list)
+    orphans_killed = _cleanup_orphans()
+    if orphans_killed:
+        logger.info(f"Cleaned up {len(orphans_killed)} orphaned tmux sessions: {orphans_killed}")
+
     command = args.get("command")
     if not command:
         return json.dumps({"error": "No command provided", "output": "", "exit_code": -1})
@@ -391,6 +562,10 @@ def _handle_tmux_terminal(args, **kw):
             command=command,
             workdir=args.get("workdir"),
         )
+        # Track the background session (using a generated ID since the actual
+        # tmux session ID is created inside the wrapper script)
+        bg_session_id = f"hermes-bg-{uuid.uuid4().hex[:8]}"
+        _track_start(bg_session_id, command, args.get("workdir") or os.getcwd())
         try:
             from tools.process_registry import process_registry
             session = process_registry.spawn_local(
@@ -405,6 +580,7 @@ def _handle_tmux_terminal(args, **kw):
                 "exit_code": 0,
                 "error": None,
             }
+            _track_update(bg_session_id, "running", pid=str(session.pid))
             if not args.get("notify_on_complete", False):
                 result["hint"] = (
                     "background=true without notify_on_complete=true means "
@@ -417,6 +593,7 @@ def _handle_tmux_terminal(args, **kw):
         except ImportError:
             # process_registry not available — fall back to foreground
             logger.warning("process_registry not available, falling back to foreground")
+            _track_update(bg_session_id, "failed")
             return _run_tmux_command(
                 command=command,
                 timeout=args.get("timeout", 600),

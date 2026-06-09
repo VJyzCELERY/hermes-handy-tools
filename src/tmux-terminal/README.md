@@ -10,6 +10,8 @@ Key differences from `terminal()`:
 - **Full TTY** — tmux provides a real terminal, so ncurses apps, colored output, and interactive CLIs work correctly
 - **No pipe bottleneck** — `terminal()` pipes output through `subprocess.PIPE`, making OpenCode 10-30x slower. tmux_terminal uses a real PTY.
 - **Hermes env inheritance** — automatically forwards all Hermes environment variables (session state, profile .env vars, `HERMES_*` prefixed vars, `PYTHONPATH`, etc.) into the tmux session
+- **Orphan cleanup** — detects and kills stale `hermes-*` tmux sessions from interrupted Hermes/subagent processes
+- **Session tracking** — logs every tool call with session ID, command, timestamp, and status for debugging
 - **Ephemeral** — session created and destroyed per call, no state leaks
 - **No polling** — background mode uses `notify_on_complete` so Hermes tells you when it's done
 
@@ -112,6 +114,40 @@ terminal(
 This ensures commands inside tmux see the same environment as `terminal()` would, regardless of which Hermes profile is active.
 
 **How it works:** The tool writes env vars to a temporary bash file, then sources it inside the tmux session via `source /path/to/hermes-env-xxxxx.sh`.
+
+## Orphan Detection
+
+Every time `tmux_terminal` is called, it scans for stale `hermes-*` tmux sessions and kills them. This handles:
+
+- **Hermes interrupted** — WSL shutdown, crash, OOM kill leaves tmux sessions running
+- **Subagent killed** — mid-command termination leaves orphaned sessions
+- **Wrapper script died** — tmux session survived but the wrapper exited
+
+**How it works:**
+1. Lists all live `hermes-*` tmux sessions via `tmux list-sessions`
+2. Cross-references with the tracking file (`~/.hermes/logs/tmux-terminal-sessions.tsv`)
+3. Any session in tmux but NOT tracked as `running` is an orphan → killed
+4. Orphaned temp output files (`/tmp/tmux-output-hermes-*`) are also cleaned up
+
+## Session Tracking
+
+Every tool call is logged to `~/.hermes/logs/tmux-terminal-sessions.tsv`:
+
+```
+session_id    command    start_time    status    workdir    pid
+hermes-112036e5    echo hello    1780997862.4    completed    /path/to/workdir
+```
+
+**Status values:** `running` → `completed` | `failed` | `timeout` | `orphaned`
+
+**Audit log** at `~/.hermes/logs/tmux-terminal.log`:
+```
+[2026-06-09T09:37:42.400066+00:00] [hermes-112036e5] [start] cmd=echo hello workdir=/path
+[2026-06-09T09:37:42.720833+00:00] [hermes-112036e5] [completed]
+[2026-06-09T09:37:35.615700+00:00] [hermes-orphan-test] [orphan_kill] detected at cleanup
+```
+
+**Cleanup:** Completed/failed entries older than 1 hour are automatically pruned from the tracking file.
 
 ## How it works
 
