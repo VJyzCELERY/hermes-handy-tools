@@ -708,7 +708,7 @@ def test_goal_and_dependency_errors_are_structured(tmp_path, monkeypatch):
     assert error.value.code == "missing_goal"
 
 
-def test_store_rejects_duplicate_and_supports_scheduler_checkpoint(
+def test_scheduler_requires_expected_revision(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -717,8 +717,20 @@ def test_store_rejects_duplicate_and_supports_scheduler_checkpoint(
     with pytest.raises(CoordinatorError) as error:
         activate(payload())
     assert error.value.code == "already_exists"
-    assert store.set_next_action("resume")["next_action"] == "resume"
-    assert store.set_next_action("resume")["revision"] == 2
+    assert (
+        store.set_next_action("resume", expected_revision=1)["next_action"]
+        == "resume"
+    )
+    assert store.set_next_action("resume", expected_revision=2)["revision"] == 3
+    before = store.read()
+    activity_before = store.activity_path.read_text()
+
+    with pytest.raises(CoordinatorError) as error:
+        store.set_next_action("stale", expected_revision=1)
+
+    assert error.value.code == "revision_conflict"
+    assert store.read() == before
+    assert store.activity_path.read_text() == activity_before
 
 
 def test_store_rejects_malformed_config(tmp_path, monkeypatch):

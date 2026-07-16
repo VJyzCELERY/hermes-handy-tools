@@ -713,6 +713,120 @@ def test_activation_rejects_malformed_bindings(field, value):
     assert error.value.code in {"invalid_template", "invalid_profile", "invalid_policy"}
 
 
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        "../escape",
+        "/absolute",
+        "snapshots/../escape",
+        "snapshots/./demo",
+        "bad\x00path",
+    ],
+)
+def test_malformed_paths_reject_snapshot(snapshot):
+    data = activation()
+    data["template"]["snapshot"] = snapshot
+
+    with pytest.raises(CoordinatorError) as error:
+        activation_payload(data)
+
+    assert error.value.code == "invalid_template"
+
+
+@pytest.mark.parametrize(
+    "worktree", ["relative", "/worktree/../escape", "/bad\x00path"]
+)
+def test_malformed_paths_reject_worktree(tmp_path, monkeypatch, worktree):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    from hermes_devlog.store import StateStore
+
+    store = StateStore.from_goal("demo")
+    before = store.read()
+    activity_before = store.activity_path.read_text()
+    data = {
+        "phase": "plan",
+        "owner": "planner",
+        "attempt": 1,
+        "work_item_id": "demo",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "s",
+        "process_id": "p",
+        "command": "plan",
+        "worktree": worktree,
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "plan",
+    }
+
+    with pytest.raises(CoordinatorError) as error:
+        phase("demo", data, 1)
+
+    assert error.value.code == "invalid_phase_run"
+    assert store.read() == before
+    assert store.activity_path.read_text() == activity_before
+
+
+def test_dangling_phase_run_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    from hermes_devlog.store import StateStore
+
+    store = StateStore.from_goal("demo")
+    state = store.read()
+    state["phase_runs"].append(
+        {
+            "phase": "plan",
+            "attempt": 1,
+            "owner": "planner",
+            "work_item_id": "missing",
+            "worker_role": "planner",
+            "model": "model",
+            "variant": "high",
+            "session_id": "s",
+            "process_id": "p",
+            "command": "plan",
+            "worktree": "/worktree",
+            "expected_evidence": "plan",
+            "observed_evidence": "plan",
+            "next_action": "plan",
+            "status": "completed",
+            "question_status": "none",
+        }
+    )
+    store.state_path.write_text(json.dumps(state))
+
+    result = hermes_devlog("status", {"goal_id": "demo"})
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_state"
+
+
+def test_invalid_question_status_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    from hermes_devlog.store import StateStore
+
+    store = StateStore.from_goal("demo")
+    state = store.read()
+    state["questions"].append(
+        {
+            "session_id": "s",
+            "question": "which file?",
+            "question_class": "general",
+            "status": "invalid",
+        }
+    )
+    store.state_path.write_text(json.dumps(state))
+
+    result = hermes_devlog("status", {"goal_id": "demo"})
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_state"
+
+
 def test_integration_gate_accepts_json_evidence():
     assert (
         integration_gate(

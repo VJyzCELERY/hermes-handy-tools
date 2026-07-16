@@ -13,6 +13,7 @@ from .validation import (
     identifier,
     integration_gate,
     json_value,
+    normalized_absolute_path,
     normalized_policy,
     reject_secrets,
 )
@@ -333,6 +334,7 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
     json_value(data["expected_evidence"], "phase.expected_evidence")
     json_value(data["observed_evidence"], "phase.observed_evidence")
     identifier(data["work_item_id"], "phase.work_item_id")
+    normalized_absolute_path(data["worktree"], "phase.worktree", "invalid_phase_run")
     phase_status = data.get("status", "completed")
     if not isinstance(phase_status, str) or phase_status not in PHASE_RUN_STATUSES:
         raise CoordinatorError("invalid_phase_run", "unsupported phase run status")

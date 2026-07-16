@@ -2,6 +2,7 @@
 
 import re
 from collections.abc import Mapping
+from pathlib import Path, PurePosixPath
 
 from .errors import CoordinatorError
 
@@ -25,6 +26,14 @@ PHASES = {
 }
 PHASE_RUN_STATUSES = {"running", "completed", "failed", "cancelled"}
 QUESTION_STATUSES = {"none", "answered", "needs_user"}
+QUESTION_RECORD_STATUSES = {"answered", "needs_user"}
+SENSITIVE_QUESTION_CLASSES = {
+    "scope",
+    "credentials",
+    "policy",
+    "external_approval",
+    "merge",
+}
 POLICY_FIELDS = {"capacity", "notifications", "merge", "discovered_work"}
 
 
@@ -69,6 +78,38 @@ def identifier(value: object, path: str) -> str:
     return value
 
 
+def normalized_relative_reference(
+    value: object, path: str, error_code: str = "invalid_path"
+) -> str:
+    """Validate a normalized, traversal-free relative reference."""
+    if not isinstance(value, str) or not value or "\x00" in value or "\\" in value:
+        raise CoordinatorError(error_code, f"invalid relative path at {path}")
+    reference = PurePosixPath(value)
+    if (
+        reference.is_absolute()
+        or reference.as_posix() != value
+        or any(part in {".", ".."} for part in reference.parts)
+    ):
+        raise CoordinatorError(error_code, f"invalid relative path at {path}")
+    return value
+
+
+def normalized_absolute_path(
+    value: object, path: str, error_code: str = "invalid_path"
+) -> str:
+    """Validate a normalized, absolute, traversal-free filesystem path."""
+    if not isinstance(value, str) or not value or "\x00" in value or "\\" in value:
+        raise CoordinatorError(error_code, f"invalid absolute path at {path}")
+    candidate = Path(value)
+    if (
+        not candidate.is_absolute()
+        or candidate.as_posix() != value
+        or ".." in candidate.parts
+    ):
+        raise CoordinatorError(error_code, f"invalid absolute path at {path}")
+    return value
+
+
 def _template(value: object) -> dict:
     template = strict_mapping(
         value, {"release", "commit", "manifest_hash", "snapshot"}, "template"
@@ -79,6 +120,9 @@ def _template(value: object) -> dict:
         raise CoordinatorError(
             "invalid_template", "template binding fields must be non-empty strings"
         )
+    normalized_relative_reference(
+        template["snapshot"], "template.snapshot", "invalid_template"
+    )
     if not SHA1.fullmatch(template["commit"]):
         raise CoordinatorError(
             "invalid_template", "template commit must be a 40-character SHA"
@@ -301,7 +345,7 @@ def _validate_work_items(value: object, nodes: Mapping) -> None:
             raise CoordinatorError("invalid_state", "work item next_action is invalid")
 
 
-def _validate_phase_runs(value: object) -> None:
+def _validate_phase_runs(value: object, nodes: Mapping) -> None:
     fields = {
         "phase",
         "attempt",
@@ -342,6 +386,11 @@ def _validate_phase_runs(value: object) -> None:
                 raise CoordinatorError("invalid_state", f"phase run {field} is invalid")
         identifier(item["work_item_id"], "phase_run.work_item_id")
         identifier(item["worker_role"], "phase_run.worker_role")
+        if item["work_item_id"] not in nodes:
+            raise CoordinatorError("invalid_state", "phase run work item is missing")
+        normalized_absolute_path(
+            item["worktree"], "phase_run.worktree", "invalid_state"
+        )
         json_value(item["expected_evidence"], "phase_run.expected_evidence")
         json_value(item["observed_evidence"], "phase_run.observed_evidence")
         if (
@@ -405,6 +454,22 @@ def _validate_questions(value: object) -> None:
             raise CoordinatorError("invalid_state", "question escalation is invalid")
         if "reason" in item and not isinstance(item["reason"], str):
             raise CoordinatorError("invalid_state", "question reason is invalid")
+        if item["status"] not in QUESTION_RECORD_STATUSES:
+            raise CoordinatorError("invalid_state", "question status is invalid")
+        answer = item.get("answer")
+        escalated = item.get("escalate") is True
+        if item["status"] == "answered" and (
+            not isinstance(answer, str) or not answer or escalated
+        ):
+            raise CoordinatorError("invalid_state", "answered question is incompatible")
+        if item["status"] == "needs_user" and (
+            answer
+            and not escalated
+            and item["question_class"] not in SENSITIVE_QUESTION_CLASSES
+        ):
+            raise CoordinatorError(
+                "invalid_state", "escalated question is incompatible"
+            )
 
 
 def _validate_discovered_work(value: object) -> None:
@@ -497,7 +562,7 @@ def validate_state(state: object) -> dict:
         raise CoordinatorError("invalid_state", "state policy and capacity disagree")
     nodes = _validate_goal_graph(data.get("goal_graph"))
     _validate_work_items(data.get("work_items"), nodes)
-    _validate_phase_runs(data.get("phase_runs"))
+    _validate_phase_runs(data.get("phase_runs"), nodes)
     _validate_reviews(data.get("reviews"))
     _validate_questions(data.get("questions"))
     _validate_discovered_work(data.get("discovered_work"))

@@ -122,18 +122,14 @@ class StateStore:
             self._activity(operation, updated["revision"], actor, verified)
         return updated
 
-    def set_next_action(self, action: str) -> dict:
-        """Persist a scheduler checkpoint when it differs from the current one."""
-        with self.locked():
-            state = self.read()
-            if state["next_action"] == action:
-                return state
+    def set_next_action(self, action: str, expected_revision: int) -> dict:
+        """Persist a scheduler checkpoint with optimistic concurrency."""
+
+        def change(state: dict) -> dict:
             state["next_action"] = action
-            state["revision"] += 1
-            validate_state(state)
-            self._atomic_json(self.state_path, state)
-            self._activity("schedule", state["revision"])
             return state
+
+        return self.mutate(expected_revision, "schedule", change)
 
     def _atomic_json(self, path: Path, value: dict) -> None:
         temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
