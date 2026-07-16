@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .errors import CoordinatorError
-from .validation import expected_revision, identifier, reject_secrets
+from .validation import expected_revision, identifier, reject_secrets, validate_state
 
 
 class StateStore:
@@ -39,26 +39,8 @@ class StateStore:
             raise CoordinatorError(
                 "unsupported_version", "state schema version is unsupported"
             )
-        allowed = {
-            "schema_version",
-            "revision",
-            "phase",
-            "next_action",
-            "goal_graph",
-            "work_items",
-            "phase_runs",
-            "reviews",
-            "questions",
-            "discovered_work",
-            "gates",
-            "capacity",
-            "policy",
-            "completion",
-        }
-        if set(state) - allowed:
-            raise CoordinatorError("unknown_field", "unknown field in state")
         reject_secrets(state)
-        return state
+        return validate_state(state)
 
     @contextmanager
     def locked(self):
@@ -103,9 +85,23 @@ class StateStore:
                 )
             updated = change(json.loads(json.dumps(state)))
             updated["revision"] = expected + 1
+            validate_state(updated)
             self._atomic_json(self.state_path, updated)
             self._activity(operation, updated["revision"], actor, verified)
         return updated
+
+    def set_next_action(self, action: str) -> dict:
+        """Persist a scheduler checkpoint when it differs from the current one."""
+        with self.locked():
+            state = self.read()
+            if state["next_action"] == action:
+                return state
+            state["next_action"] = action
+            state["revision"] += 1
+            validate_state(state)
+            self._atomic_json(self.state_path, state)
+            self._activity("schedule", state["revision"])
+            return state
 
     def _atomic_json(self, path: Path, value: dict) -> None:
         temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")

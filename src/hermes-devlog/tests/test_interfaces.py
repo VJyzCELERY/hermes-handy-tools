@@ -57,22 +57,41 @@ def test_cli_and_custom_tool_have_equivalent_activation(tmp_path, monkeypatch, c
 def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(activation())
-    question("demo", {"session_id": "s", "question": "scope?"}, 1)
-    discovered_work("demo", {"id": "bug", "title": "Bug"}, 2)
+    phase_data = {
+        "phase": "plan",
+        "owner": "planner",
+        "attempt": 1,
+        "session_id": "s",
+        "process_id": "p",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan-record",
+        "observed_evidence": "plan-record",
+        "next_action": "implement",
+    }
+    phase("demo", phase_data, 1)
+    phase_data["phase"] = "implement"
+    phase_data["next_action"] = "implementation_review"
+    phase("demo", phase_data, 2)
+    phase_data["phase"] = "implementation_review"
+    phase_data["next_action"] = "verify"
+    phase("demo", phase_data, 3)
+    question("demo", {"session_id": "s", "question": "scope?"}, 4)
+    discovered_work("demo", {"id": "bug", "title": "Bug"}, 5)
     with pytest.raises(CoordinatorError) as error:
-        complete("demo", 3)
+        complete("demo", 6)
     assert error.value.code == "incomplete_gates"
-    discovered_work("demo", {"id": "bug", "title": "Bug", "disposition": "deferred"}, 3)
-    gate("demo", "final_verification", True, 4)
-    review("demo", {"head": "h", "base": "b", "diff": "d", "findings": []}, 5)
-    result = complete("demo", 6)
+    discovered_work("demo", {"id": "bug", "title": "Bug", "disposition": "deferred"}, 6)
+    gate("demo", "final_verification", True, 7)
+    review("demo", {"head": "h", "base": "b", "diff": "d", "findings": []}, 8)
+    result = complete("demo", 9)
     assert result["state"]["completion"]["terminal"] is True
 
 
 def test_cli_reports_structured_input_errors(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     assert main(["unknown", "{}"]) == 1
-    result = json.loads(capsys.readouterr().out)
+    result = json.loads(capsys.readouterr().err)
     assert result["ok"] is False
     assert result["error"]["code"] == "unsupported_operation"
 
@@ -118,8 +137,22 @@ def test_service_rejects_invalid_graphs_and_records_workflow(tmp_path, monkeypat
     add_dependency("demo", "demo", "child", 2)
     with pytest.raises(CoordinatorError):
         add_dependency("demo", "demo", "child", 3)
-    phase("demo", {"phase": "plan", "owner": "planner", "next_action": "plan"}, 3)
-    phase("demo", {"phase": "implement", "owner": "builder"}, 4)
+    phase_data = {
+        "phase": "plan",
+        "owner": "planner",
+        "attempt": 1,
+        "session_id": "s",
+        "process_id": "p",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan-record",
+        "observed_evidence": "plan-record",
+        "next_action": "plan",
+    }
+    phase("demo", phase_data, 3)
+    phase_data["phase"] = "implement"
+    phase_data["next_action"] = "implement"
+    phase("demo", phase_data, 4)
     with pytest.raises(CoordinatorError):
         phase("demo", {"phase": "issue", "owner": "builder"}, 5)
     review("demo", {"head": "h", "base": "b", "diff": "d", "findings": ["one"]}, 5)
@@ -181,7 +214,7 @@ def test_cli_and_custom_tool_return_equivalent_malformed_input(
 ):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     assert main([operation, json.dumps({"goal_id": "demo"})]) == 1
-    cli_result = json.loads(capsys.readouterr().out)
+    cli_result = json.loads(capsys.readouterr().err)
     tool_result = hermes_devlog(operation, {"goal_id": "demo"})
     assert tool_result == cli_result
 

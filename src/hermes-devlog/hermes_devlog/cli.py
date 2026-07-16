@@ -5,6 +5,7 @@ import sys
 
 from . import service
 from .errors import CoordinatorError
+from .validation import strict_mapping
 
 OPERATIONS = {
     "activate",
@@ -26,6 +27,28 @@ def _dispatch(operation: str, payload: dict) -> dict:
         raise CoordinatorError(
             "unsupported_operation", f"unsupported operation: {operation}"
         )
+    envelopes = {
+        "activate": {
+            "goal_id",
+            "title",
+            "template",
+            "profile",
+            "route",
+            "permissions",
+            "policy",
+        },
+        "status": {"goal_id"},
+        "next": {"goal_id"},
+        "goal": {"goal_id", "node", "expected_revision"},
+        "dependency": {"goal_id", "blocker", "blocked", "expected_revision"},
+        "phase": {"goal_id", "data", "expected_revision"},
+        "review": {"goal_id", "data", "expected_revision"},
+        "question": {"goal_id", "data", "expected_revision"},
+        "complete": {"goal_id", "expected_revision"},
+        "gate": {"goal_id", "name", "value", "expected_revision"},
+        "discovered_work": {"goal_id", "item", "expected_revision"},
+    }
+    payload = strict_mapping(payload, envelopes[operation], f"{operation} envelope")
     if operation == "activate":
         return service.activate(payload)
     goal_id = payload["goal_id"]
@@ -66,5 +89,7 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(exc, CoordinatorError)
             else {"code": "invalid_input", "message": str(exc)}
         )
-        print(json.dumps({"ok": False, "error": error}, sort_keys=True))
+        print(
+            json.dumps({"ok": False, "error": error}, sort_keys=True), file=sys.stderr
+        )
         return 1

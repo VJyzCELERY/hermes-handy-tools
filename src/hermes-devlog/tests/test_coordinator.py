@@ -9,7 +9,9 @@ from hermes_devlog.service import (
     add_goal,
     complete,
     gate,
+    next_action,
     phase,
+    question,
     review,
 )
 from hermes_devlog.store import StateStore
@@ -91,22 +93,91 @@ def test_completion_requires_clean_review_children_and_dependencies(
     add_goal("demo-goal", {"id": "child", "title": "Child"}, 1)
     add_dependency("demo-goal", "child", "demo-goal", 2)
 
-    gate("demo-goal", "final_verification", True, 3)
+    phase_data = {
+        "phase": "plan",
+        "owner": "planner",
+        "attempt": 1,
+        "session_id": "s",
+        "process_id": "p",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "implement",
+    }
+    phase("demo-goal", phase_data, 3)
+    phase_data["phase"] = "implement"
+    phase_data["next_action"] = "implementation_review"
+    phase("demo-goal", phase_data, 4)
+    phase_data["phase"] = "implementation_review"
+    phase_data["next_action"] = "verify"
+    phase("demo-goal", phase_data, 5)
+
+    gate("demo-goal", "final_verification", True, 6)
     with pytest.raises(CoordinatorError) as error:
-        complete("demo-goal", 4)
+        complete("demo-goal", 7)
     assert error.value.code == "stale_review"
 
     review(
         "demo-goal",
         {"head": "h", "base": "b", "diff": "d", "findings": ["open"]},
-        4,
+        7,
     )
     with pytest.raises(CoordinatorError) as error:
-        complete("demo-goal", 5)
+        complete("demo-goal", 8)
     assert error.value.code == "stale_review"
 
-    review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 5)
+    review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 8)
     with pytest.raises(CoordinatorError) as error:
-        complete("demo-goal", 6)
+        complete("demo-goal", 9)
     assert error.value.code == "incomplete_children"
     assert StateStore.from_goal("demo-goal").read()["completion"]["terminal"] is False
+
+
+def test_completion_requires_implementation_review_phase(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    gate("demo-goal", "final_verification", True, 1)
+    review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 2)
+    with pytest.raises(CoordinatorError) as error:
+        complete("demo-goal", 3)
+    assert error.value.code == "incomplete_workflow"
+
+
+def test_phase_requires_a_complete_resume_record(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    with pytest.raises(CoordinatorError) as error:
+        phase("demo-goal", {"phase": "plan", "owner": "planner"}, 1)
+    assert error.value.code == "incomplete_phase_run"
+
+
+def test_child_policy_cannot_broaden_merge_authority(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    with pytest.raises(CoordinatorError) as error:
+        add_goal(
+            "demo-goal",
+            {"id": "child", "title": "Child", "policy": {"merge": True}},
+            1,
+        )
+    assert error.value.code == "policy_broadening"
+
+
+def test_sensitive_question_always_needs_user(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    result = question(
+        "demo-goal",
+        {"session_id": "s", "question": "May I merge this PR?", "answer": "yes"},
+        1,
+    )
+    assert result["state"]["questions"][-1]["status"] == "needs_user"
+
+
+def test_next_action_selects_ready_child(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    add_goal("demo-goal", {"id": "child", "title": "Child"}, 1)
+    result = next_action("demo-goal")
+    assert result["next_action"] == "begin_child:child"
