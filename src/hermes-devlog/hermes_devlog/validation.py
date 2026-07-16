@@ -141,6 +141,20 @@ def json_value(value: object, path: str) -> None:
     raise CoordinatorError("invalid_state", f"{path} is not JSON-compatible")
 
 
+def integration_gate(value: object) -> dict:
+    """Validate one bounded integration-gate record."""
+    data = strict_mapping(value, {"id", "status", "evidence"}, "integration_gate")
+    if set(data) != {"id", "status", "evidence"}:
+        raise CoordinatorError(
+            "invalid_gate", "integration gate records require id, status, and evidence"
+        )
+    identifier(data["id"], "integration_gate.id")
+    if data["status"] not in {"open", "resolved"}:
+        raise CoordinatorError("invalid_gate", "integration gate status is unsupported")
+    json_value(data["evidence"], "integration_gate.evidence")
+    return data
+
+
 def validate_state(state: object) -> dict:
     """Validate every durable state record before coordinator use."""
     allowed = {
@@ -277,6 +291,10 @@ def validate_state(state: object) -> dict:
         "phase",
         "attempt",
         "owner",
+        "work_item_id",
+        "worker_role",
+        "model",
+        "variant",
         "session_id",
         "process_id",
         "command",
@@ -307,6 +325,8 @@ def validate_state(state: object) -> dict:
         }:
             if not isinstance(item[field], str) or not item[field]:
                 raise CoordinatorError("invalid_state", f"phase run {field} is invalid")
+        identifier(item["work_item_id"], "phase_run.work_item_id")
+        identifier(item["worker_role"], "phase_run.worker_role")
         json_value(item["expected_evidence"], "phase_run.expected_evidence")
         json_value(item["observed_evidence"], "phase_run.observed_evidence")
         if "status" in item and not isinstance(item["status"], str):
@@ -316,9 +336,11 @@ def validate_state(state: object) -> dict:
         raise CoordinatorError("invalid_state", "reviews must be a list")
     for review in data["reviews"]:
         item = strict_mapping(
-            review, {"head", "base", "diff", "findings", "valid"}, "review"
+            review,
+            {"head", "base", "diff", "findings", "valid", "phase"},
+            "review",
         )
-        if not {"head", "base", "diff", "findings", "valid"} <= set(item):
+        if not {"head", "base", "diff", "findings", "valid", "phase"} <= set(item):
             raise CoordinatorError("invalid_state", "review is incomplete")
         if not all(isinstance(item[field], str) for field in ("head", "base", "diff")):
             raise CoordinatorError("invalid_state", "review binding is invalid")
@@ -326,6 +348,8 @@ def validate_state(state: object) -> dict:
             item["valid"], bool
         ):
             raise CoordinatorError("invalid_state", "review record is invalid")
+        if item["phase"] not in PHASES:
+            raise CoordinatorError("invalid_state", "review phase is unsupported")
         json_value(item["findings"], "review.findings")
 
     if not isinstance(data.get("questions"), list):
@@ -381,6 +405,8 @@ def validate_state(state: object) -> dict:
         gates.get("final_verification"), bool
     ):
         raise CoordinatorError("invalid_state", "gates are invalid")
+    for gate in gates["integration"]:
+        integration_gate(gate)
     completion = strict_mapping(
         data.get("completion"), {"ready", "terminal"}, "completion"
     )

@@ -9,6 +9,7 @@ from .validation import (
     activation_payload,
     expected_revision,
     identifier,
+    integration_gate,
     json_value,
     normalized_policy,
     reject_secrets,
@@ -80,6 +81,8 @@ def _mutate(goal_id: str, revision: int, operation: str, change) -> dict:
 
 def add_goal(goal_id: str, node: Mapping, revision: int) -> dict:
     """Add a recursively contained goal node."""
+    if not isinstance(node, Mapping):
+        raise CoordinatorError("invalid_object", "goal node must be an object")
     reject_secrets(node)
     data = dict(node)
     if set(data) - {
@@ -140,6 +143,35 @@ def add_goal(goal_id: str, node: Mapping, revision: int) -> dict:
     return _mutate(goal_id, revision, "add_goal", change)
 
 
+def set_goal_disposition(
+    goal_id: str, child_id: str, disposition: str, revision: int
+) -> dict:
+    """Set a contained child goal's terminal disposition."""
+    identifier(child_id, "goal_id")
+    if disposition not in TERMINAL_DISPOSITIONS:
+        raise CoordinatorError(
+            "invalid_goal_disposition", "child disposition must be terminal"
+        )
+
+    def change(state):
+        nodes = state["goal_graph"]["nodes"]
+        node = nodes.get(child_id)
+        if node is None:
+            raise CoordinatorError("missing_goal", "goal does not exist")
+        if node.get("parent_id") is None:
+            raise CoordinatorError(
+                "invalid_goal_disposition", "the root goal cannot be disposed"
+            )
+        if node.get("disposition") != "open":
+            raise CoordinatorError(
+                "invalid_goal_disposition", "only open child goals can be disposed"
+            )
+        node["disposition"] = disposition
+        return state
+
+    return _mutate(goal_id, revision, "goal_disposition", change)
+
+
 def add_dependency(goal_id: str, blocker: str, blocked: str, revision: int) -> dict:
     """Add a dependency edge while preserving DAG semantics."""
     identifier(blocker, "blocker")
@@ -182,11 +214,17 @@ def add_dependency(goal_id: str, blocker: str, blocked: str, revision: int) -> d
 def phase(goal_id: str, data: Mapping, revision: int) -> dict:
     """Record a worker phase with explicit ownership and checkpoint."""
     expected_revision(revision)
+    if not isinstance(data, Mapping):
+        raise CoordinatorError("invalid_object", "phase data must be an object")
     reject_secrets(data)
     allowed = {
         "phase",
         "attempt",
         "owner",
+        "work_item_id",
+        "worker_role",
+        "model",
+        "variant",
         "session_id",
         "process_id",
         "command",
@@ -204,6 +242,10 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
         "phase",
         "attempt",
         "owner",
+        "work_item_id",
+        "worker_role",
+        "model",
+        "variant",
         "session_id",
         "process_id",
         "command",
@@ -274,6 +316,9 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
             raise CoordinatorError(
                 "invalid_transition", "terminal workflow phase cannot move"
             )
+        if target in {"implement", "remediation"}:
+            for item in state["reviews"]:
+                item["valid"] = False
         state["phase"] = target
         state["next_action"] = data.get("next_action", f"continue_{target}")
         state["phase_runs"].append(dict(data))
@@ -284,6 +329,8 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
 
 def review(goal_id: str, data: Mapping, revision: int) -> dict:
     """Record review evidence and invalidate prior bindings on drift."""
+    if not isinstance(data, Mapping):
+        raise CoordinatorError("invalid_object", "review data must be an object")
     reject_secrets(data)
     required = {"head", "base", "diff", "findings"}
     if set(data) != required or not all(
@@ -297,9 +344,17 @@ def review(goal_id: str, data: Mapping, revision: int) -> dict:
 
     def change(state):
         for prior in state["reviews"]:
-            if any(prior[key] != data[key] for key in ("head", "base", "diff")):
+            if prior["head"] != data["head"] or all(
+                prior[key] == data[key] for key in ("base", "diff")
+            ):
                 prior["valid"] = False
-        state["reviews"].append({**dict(data), "valid": not bool(data["findings"])})
+        state["reviews"].append(
+            {
+                **dict(data),
+                "phase": state["phase"],
+                "valid": not bool(data["findings"]),
+            }
+        )
         state["next_action"] = (
             "remediate_review" if data["findings"] else "continue_implementation"
         )
@@ -310,6 +365,8 @@ def review(goal_id: str, data: Mapping, revision: int) -> dict:
 
 def question(goal_id: str, data: Mapping, revision: int) -> dict:
     """Record an answer or escalate a worker question."""
+    if not isinstance(data, Mapping):
+        raise CoordinatorError("invalid_object", "question data must be an object")
     reject_secrets(data)
     allowed = {
         "session_id",
@@ -412,8 +469,6 @@ def next_action(goal_id: str) -> dict:
     store = _store(goal_id)
     state = store.read()
     action = _scheduled_action(state)
-    if action != state["next_action"] and hasattr(store, "set_next_action"):
-        state = store.set_next_action(action)
     return {"next_action": action, "revision": state["revision"]}
 
 
@@ -423,7 +478,7 @@ def complete(goal_id: str, revision: int) -> dict:
     config = store.read_config()
 
     def change(state):
-        if state.get("phase") not in {"implementation_review", "remediation"}:
+        if state.get("phase") != "implementation_review":
             raise CoordinatorError(
                 "incomplete_workflow", "completion requires implementation review"
             )
@@ -436,11 +491,16 @@ def complete(goal_id: str, revision: int) -> dict:
                 "incomplete_gates", "completion gates are not satisfied"
             )
         reviews = state["reviews"]
-        current_review = reviews[-1] if reviews else None
-        if (
-            current_review is None
-            or not current_review.get("valid")
-            or current_review.get("findings")
+        current_head = reviews[-1]["head"] if reviews else None
+        current_bindings = {}
+        for item in reviews:
+            if item["head"] == current_head:
+                current_bindings[(item["base"], item["diff"])] = item
+        if not current_bindings or any(
+            not item.get("valid")
+            or item.get("findings")
+            or item.get("phase") != "implementation_review"
+            for item in current_bindings.values()
         ):
             raise CoordinatorError(
                 "stale_review", "stale review evidence cannot complete a goal"
@@ -487,12 +547,27 @@ def complete(goal_id: str, revision: int) -> dict:
 
 def gate(goal_id: str, name: str, value: object, revision: int) -> dict:
     """Record a verified integration or final-verification gate."""
+    reject_secrets(value)
     if name not in {"final_verification", "integration"}:
         raise CoordinatorError("invalid_gate", "unsupported completion gate")
+    integration = None if value is True else integration_gate(value)
 
     def change(state):
         if name == "integration":
-            state["gates"][name] = [] if value is True else [value]
+            if value is True:
+                state["gates"][name] = []
+            elif integration["status"] == "resolved":
+                state["gates"][name] = [
+                    item
+                    for item in state["gates"][name]
+                    if item["id"] != integration["id"]
+                ]
+            else:
+                state["gates"][name] = [
+                    item
+                    for item in state["gates"][name]
+                    if item["id"] != integration["id"]
+                ] + [integration]
         else:
             if not isinstance(value, bool):
                 raise CoordinatorError(
@@ -506,8 +581,16 @@ def gate(goal_id: str, name: str, value: object, revision: int) -> dict:
 
 def discovered_work(goal_id: str, item: Mapping, revision: int) -> dict:
     """Record discovered work until Hermes explicitly disposes of it."""
+    if not isinstance(item, Mapping):
+        raise CoordinatorError("invalid_object", "discovered work must be an object")
+    reject_secrets(item)
     if set(item) - {"id", "title", "disposition"} or not item.get("id"):
         raise CoordinatorError("invalid_discovered_work", "discovered work needs an id")
+    identifier(item["id"], "discovered_work.id")
+    if "title" in item and not isinstance(item["title"], str):
+        raise CoordinatorError(
+            "invalid_discovered_work", "discovered work title must be a string"
+        )
     disposition = item.get("disposition", "open")
     if disposition not in {"open", "resolved", "deferred", "excluded"}:
         raise CoordinatorError("invalid_discovered_work", "unsupported disposition")

@@ -13,6 +13,7 @@ from hermes_devlog.service import (
     phase,
     question,
     review,
+    set_goal_disposition,
 )
 from hermes_devlog.store import StateStore
 
@@ -97,6 +98,10 @@ def test_completion_requires_clean_review_children_and_dependencies(
         "phase": "plan",
         "owner": "planner",
         "attempt": 1,
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -171,6 +176,10 @@ def test_merge_permission_gate(tmp_path, monkeypatch):
         "phase": "plan",
         "owner": "planner",
         "attempt": 1,
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -229,3 +238,92 @@ def test_next_action_selects_ready_child(tmp_path, monkeypatch):
     add_goal("demo-goal", {"id": "child", "title": "Child"}, 1)
     result = next_action("demo-goal")
     assert result["next_action"] == "begin_child:child"
+
+
+def test_child_goal_can_transition_to_terminal(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    add_goal("demo-goal", {"id": "child", "title": "Child"}, 1)
+
+    result = set_goal_disposition("demo-goal", "child", "resolved", 2)
+
+    assert result["state"]["goal_graph"]["nodes"]["child"]["disposition"] == (
+        "resolved"
+    )
+
+
+def test_stacked_review_bindings_remain_current_independently(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    review("demo-goal", {"head": "h", "base": "b1", "diff": "d1", "findings": []}, 1)
+    result = review(
+        "demo-goal", {"head": "h", "base": "b2", "diff": "d2", "findings": []}, 2
+    )
+
+    assert all(item["valid"] for item in result["state"]["reviews"])
+
+
+def test_phase_run_identity_is_required_and_persisted(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    data = {
+        "phase": "plan",
+        "attempt": 1,
+        "owner": "planner",
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "openai/gpt-5.6-luna",
+        "variant": "high",
+        "session_id": "s",
+        "process_id": "p",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "implement",
+    }
+
+    result = phase("demo-goal", data, 1)
+
+    assert result["state"]["phase_runs"][-1]["work_item_id"] == "demo-goal"
+    assert result["state"]["phase_runs"][-1]["worker_role"] == "planner"
+    assert result["state"]["phase_runs"][-1]["model"] == "openai/gpt-5.6-luna"
+    assert result["state"]["phase_runs"][-1]["variant"] == "high"
+
+
+def test_completion_requires_implementation_review_after_remediation(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    data = payload()
+    data["permissions"]["merge"] = True
+    data["policy"] = {"merge": True}
+    activate(data)
+    phase_data = {
+        "phase": "plan",
+        "owner": "planner",
+        "attempt": 1,
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "s",
+        "process_id": "p",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "implement",
+    }
+    phase("demo-goal", phase_data, 1)
+    phase_data.update({"phase": "implement", "next_action": "implementation_review"})
+    phase("demo-goal", phase_data, 2)
+    phase_data.update({"phase": "remediation", "next_action": "implementation_review"})
+    phase("demo-goal", phase_data, 3)
+    gate("demo-goal", "final_verification", True, 4)
+    review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 5)
+
+    with pytest.raises(CoordinatorError) as error:
+        complete("demo-goal", 6)
+
+    assert error.value.code == "incomplete_workflow"

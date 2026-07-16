@@ -12,6 +12,7 @@ OPERATIONS = {
     "status",
     "next",
     "goal",
+    "goal_disposition",
     "dependency",
     "phase",
     "review",
@@ -40,6 +41,12 @@ def _dispatch(operation: str, payload: dict) -> dict:
         "status": {"goal_id"},
         "next": {"goal_id"},
         "goal": {"goal_id", "node", "expected_revision"},
+        "goal_disposition": {
+            "goal_id",
+            "child_id",
+            "disposition",
+            "expected_revision",
+        },
         "dependency": {"goal_id", "blocker", "blocked", "expected_revision"},
         "phase": {"goal_id", "data", "expected_revision"},
         "review": {"goal_id", "data", "expected_revision"},
@@ -59,6 +66,10 @@ def _dispatch(operation: str, payload: dict) -> dict:
     revision = payload["expected_revision"]
     if operation == "goal":
         return service.add_goal(goal_id, payload["node"], revision)
+    if operation == "goal_disposition":
+        return service.set_goal_disposition(
+            goal_id, payload["child_id"], payload["disposition"], revision
+        )
     if operation == "dependency":
         return service.add_dependency(
             goal_id, payload["blocker"], payload["blocked"], revision

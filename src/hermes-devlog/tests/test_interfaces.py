@@ -62,6 +62,10 @@ def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
         "phase": "plan",
         "owner": "planner",
         "attempt": 1,
+        "work_item_id": "demo",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -95,6 +99,96 @@ def test_cli_reports_structured_input_errors(tmp_path, monkeypatch, capsys):
     result = json.loads(capsys.readouterr().err)
     assert result["ok"] is False
     assert result["error"]["code"] == "unsupported_operation"
+
+
+def test_gate_rejects_secret_values_without_mutation(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    from hermes_devlog.store import StateStore
+
+    store = StateStore.from_goal("demo")
+    before = store.read()
+    activity_before = store.activity_path.read_text()
+
+    with pytest.raises(CoordinatorError) as error:
+        service.gate("demo", "integration", {"api_token": "x"}, 1)
+
+    assert error.value.code == "secret_field"
+    assert store.read() == before
+    assert store.activity_path.read_text() == activity_before
+
+
+def test_discovered_work_rejects_secret_input_without_mutation(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    from hermes_devlog.store import StateStore
+
+    store = StateStore.from_goal("demo")
+    before = store.read()
+    activity_before = store.activity_path.read_text()
+
+    with pytest.raises(CoordinatorError) as error:
+        discovered_work("demo", {"id": "api_token", "title": "x"}, 1)
+
+    assert error.value.code in {"secret_field", "secret_value"}
+    assert store.read() == before
+    assert store.activity_path.read_text() == activity_before
+
+
+def test_next_does_not_mutate_without_expected_revision(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    from hermes_devlog.store import StateStore
+
+    store = StateStore.from_goal("demo")
+    before = store.read()
+
+    result = service.next_action("demo")
+
+    assert result["revision"] == before["revision"]
+    assert store.read() == before
+
+
+def test_cli_rejects_malformed_nested_phase_payload(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    assert main(
+        [
+            "phase",
+            json.dumps({"goal_id": "demo", "data": [], "expected_revision": 1}),
+        ]
+    ) == 1
+
+    result = json.loads(capsys.readouterr().err)
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_object"
+
+
+def test_cli_and_custom_tool_dispose_child_goal(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    add_goal("demo", {"id": "child", "title": "Child"}, 1)
+    payload = {
+        "goal_id": "demo",
+        "child_id": "child",
+        "disposition": "deferred",
+        "expected_revision": 2,
+    }
+
+    assert main(["goal_disposition", json.dumps(payload)]) == 0
+    cli_result = json.loads(capsys.readouterr().out)
+    assert cli_result["state"]["goal_graph"]["nodes"]["child"]["disposition"] == (
+        "deferred"
+    )
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "tool"))
+    activate(activation())
+    add_goal("demo", {"id": "child", "title": "Child"}, 1)
+    tool_result = hermes_devlog("goal_disposition", payload)
+    assert tool_result["ok"] is True
+    assert tool_result["state"]["goal_graph"]["nodes"]["child"]["disposition"] == (
+        "deferred"
+    )
 
 
 def test_unsupported_state_version_is_not_migrated(tmp_path, monkeypatch):
@@ -168,6 +262,10 @@ def test_service_rejects_invalid_graphs_and_records_workflow(tmp_path, monkeypat
         "phase": "plan",
         "owner": "planner",
         "attempt": 1,
+        "work_item_id": "demo",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
