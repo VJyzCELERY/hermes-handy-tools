@@ -640,69 +640,230 @@ def test_specs_ensure_reuses_match_from_paginated_lookup(monkeypatch, capsys):
     assert not any(method == "POST" for method, _, _ in calls)
 
 
-def test_specs_publish_appends_complete_revision_and_updates_index(
-    monkeypatch, capsys, tmp_path
-):
+def _specs_paths(tmp_path):
     paths = {}
     for name in ("spec", "design", "plan", "task"):
         path = tmp_path / f"{name}.md"
         path.write_text(f"{name} content", encoding="utf-8")
         paths[name] = str(path)
+    return paths
+
+
+def _specs_args(paths, revision=1):
+    return argparse.Namespace(
+        number=77, revision=revision, primary=20, format="json", **paths
+    )
+
+
+def _specs_issue(body):
+    return {"state": "open", "labels": [{"name": "spec"}], "body": body}
+
+
+def _specs_url(comment_id, repository="acme/widgets"):
+    return f"https://github.com/{repository}/issues/77#issuecomment-{comment_id}"
+
+
+def _specs_index(documents, base="Primary Issue: #20"):
+    return f"{base}\n\n## Documents\n\n" + "".join(
+        f"- {name}: {documents[name]}\n" for name in ("spec", "design", "plan", "task")
+    )
+
+
+def _specs_comments(documents, revision=None):
+    comments = []
+    for name, url in documents.items():
+        heading = (
+            f"## Revision {revision}: {name.title()}"
+            if revision
+            else f"## {name.title()}"
+        )
+        comments.append({"body": f"{heading}\n\n{name} content", "html_url": url})
+    return comments
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "# Specs: Ship widgets\n\nPrimary Issue: #20\n",
+        "# Specs: Ship widgets\n\nPrimary Issue: #20\n\n"
+        "**Current Revision**: none\n\n## Revision History\n",
+    ],
+)
+def test_specs_publish_initializes_supported_uninitialized_body(
+    monkeypatch, capsys, tmp_path, body
+):
+    paths = _specs_paths(tmp_path)
     calls = []
 
     def fake_api(method, endpoint, data=None, **kwargs):
         calls.append((method, endpoint, data))
         if method == "GET" and endpoint == "issues/77":
-            return json.dumps({"state": "open", "labels": [{"name": "spec"}], "body": "Primary Issue: #20\n\n**Current Revision**: none\n\n## Revision History\n"}), "", 0
+            return json.dumps(_specs_issue(body)), "", 0
         if method == "GET" and endpoint.startswith("issues/77/comments"):
             return "[]", "", 0
         if method == "POST":
-            number = len([call for call in calls if call[0] == "POST"])
-            return json.dumps({"html_url": f"https://github.com/acme/widgets/issues/77#issuecomment-{number}"}), "", 0
+            comment_id = len([call for call in calls if call[0] == "POST"])
+            return json.dumps({"html_url": _specs_url(comment_id)}), "", 0
         return "{}", "", 0
 
-    monkeypatch.setattr(gh, "check_file", lambda path: True)
+    monkeypatch.setattr(gh, "get_owner_repo", lambda: "acme/widgets")
     monkeypatch.setattr(gh, "api", fake_api)
 
-    gh.cmd_specs_publish(
-        argparse.Namespace(number=77, revision=1, primary=20, format="json", **paths)
-    )
+    gh.cmd_specs_publish(_specs_args(paths))
 
     result = json.loads(capsys.readouterr().out)
     assert result["revision"] == 1
     assert set(result["documents"]) == set(paths)
-    assert calls[-1][0:2] == ("PATCH", "issues/77")
-    assert "Current Revision**: 1" in calls[-1][2]["body"]
+    assert [call[0] for call in calls].count("POST") == 4
+    assert calls[-1] == (
+        "PATCH",
+        "issues/77",
+        {
+            "body": _specs_index(
+                result["documents"], "# Specs: Ship widgets\n\nPrimary Issue: #20"
+            )
+        },
+    )
+    assert all("Revision" not in call[2]["body"] for call in calls if call[0] == "POST")
 
 
-def test_specs_index_renders_explicit_current_document_links():
-    base = "https://github.com/acme/widgets/issues/77"
-    documents = {
-        "spec": f"{base}#issuecomment-1",
-        "design": f"{base}#issuecomment-2",
-        "plan": f"{base}#issuecomment-3",
-        "task": f"{base}#issuecomment-4",
+def test_specs_publish_edits_only_changed_indexed_comment(
+    monkeypatch, capsys, tmp_path
+):
+    paths = _specs_paths(tmp_path)
+    documents = {name: _specs_url(index) for index, name in enumerate(paths, 1)}
+    comments = _specs_comments(documents)
+    discussion = {"body": "Do not touch", "html_url": _specs_url(99)}
+    comments.append(discussion)
+    Path(paths["spec"]).write_text("changed spec", encoding="utf-8")
+    calls = []
+
+    def fake_api(method, endpoint, data=None, **kwargs):
+        calls.append((method, endpoint, data))
+        if endpoint == "issues/77":
+            return json.dumps(_specs_issue(_specs_index(documents))), "", 0
+        if method == "GET":
+            return json.dumps(comments), "", 0
+        return "{}", "", 0
+
+    monkeypatch.setattr(gh, "get_owner_repo", lambda: "acme/widgets")
+    monkeypatch.setattr(gh, "api", fake_api)
+
+    gh.cmd_specs_publish(_specs_args(paths, revision=8))
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["documents"] == documents
+    assert [call for call in calls if call[0] == "PATCH"] == [
+        ("PATCH", "issues/comments/1", {"body": "## Spec\n\nchanged spec"})
+    ]
+    assert discussion == {"body": "Do not touch", "html_url": _specs_url(99)}
+
+
+def test_specs_publish_reuses_legacy_current_links_without_rewriting_body(
+    monkeypatch, capsys, tmp_path
+):
+    paths = _specs_paths(tmp_path)
+    documents = {name: _specs_url(index) for index, name in enumerate(paths, 1)}
+    labels = {
+        "spec": "Spec",
+        "design": "Design",
+        "plan": "Implementation Plan",
+        "task": "Tasks",
     }
+    body = (
+        "Primary Issue: #20\n\n**Current Revision**: 7\n"
+        + "".join(
+            f"- **{labels[name]}**: [{labels[name]}]({documents[name]})\n"
+            for name in documents
+        )
+        + "\n## Revision History\n\n- retained\n"
+    )
+    calls = []
 
-    index = gh._specs_index(
-        "Primary Issue: #20\n\n**Current Revision**: none\n\n## Revision History\n",
-        1,
-        documents,
+    def fake_api(method, endpoint, data=None, **kwargs):
+        calls.append((method, endpoint, data))
+        if endpoint == "issues/77":
+            return json.dumps(_specs_issue(body)), "", 0
+        return json.dumps(_specs_comments(documents, revision=7)), "", 0
+
+    monkeypatch.setattr(gh, "get_owner_repo", lambda: "acme/widgets")
+    monkeypatch.setattr(gh, "api", fake_api)
+
+    gh.cmd_specs_publish(_specs_args(paths, revision=9))
+
+    assert json.loads(capsys.readouterr().out)["documents"] == documents
+    assert [call for call in calls if call[0] in {"PATCH", "POST", "DELETE"}] == []
+
+
+def test_specs_publish_rejects_trailing_legacy_link_content_before_documents(
+    monkeypatch, tmp_path
+):
+    paths = {name: str(tmp_path / f"{name}.md") for name in gh._SPECS_DOCUMENTS}
+    body = (
+        "Primary Issue: #20\n\n**Current Revision**: 7\n"
+        "- **Spec**: [Spec](https://github.com/acme/widgets/issues/77#issuecomment-1)\n"
+        "- **Design**: [Design](https://github.com/acme/widgets/issues/77#issuecomment-2)\n"
+        "- **Implementation Plan**: [Implementation Plan](https://github.com/acme/widgets/issues/77#issuecomment-3)\n"
+        "- **Tasks**: [Tasks](https://github.com/acme/widgets/issues/77#issuecomment-4) trailing\n"
+        "\n## Revision History\n"
+    )
+    calls = []
+
+    def fake_api(method, endpoint, data=None, **kwargs):
+        calls.append((method, endpoint, data))
+        if method == "GET" and endpoint == "issues/77":
+            return json.dumps(_specs_issue(body)), "", 0
+        pytest.fail(f"malformed legacy index must stop before {method} {endpoint}")
+
+    monkeypatch.setattr(gh, "get_owner_repo", lambda: "acme/widgets")
+    monkeypatch.setattr(gh, "api", fake_api)
+    monkeypatch.setattr(
+        gh,
+        "check_file",
+        lambda path: pytest.fail("malformed legacy index must not read documents"),
     )
 
-    for label, name in (
-        ("Spec", "spec"),
-        ("Design", "design"),
-        ("Implementation Plan", "plan"),
-        ("Tasks", "task"),
-    ):
-        assert f"- **{label}**: [{label}]({documents[name]})" in index
+    with pytest.raises(SystemExit) as error:
+        gh.cmd_specs_publish(_specs_args(paths))
 
-    next_documents = documents | {"spec": f"{base}#issuecomment-5"}
-    current = gh._specs_index(index, 2, next_documents).split("## Revision History")[0]
+    assert error.value.code == 1
+    assert calls == [("GET", "issues/77", None)]
 
-    assert next_documents["spec"] in current
-    assert documents["spec"] not in current
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "# Specs: Ship widgets\n\nPrimary Issue: #20\n\n"
+        "**Current Revision**: none\n\n## Revision History\n\n- retained\n",
+        "# Specs: Ship widgets\n\nPrimary Issue: #20\n\n## Document\n\n"
+        "- spec: https://github.com/acme/widgets/issues/77#issuecomment-1\n",
+    ],
+)
+def test_specs_publish_rejects_malformed_uninitialized_index_before_writes(
+    monkeypatch, tmp_path, body
+):
+    paths = {name: str(tmp_path / f"{name}.md") for name in gh._SPECS_DOCUMENTS}
+    calls = []
+
+    def fake_api(method, endpoint, data=None, **kwargs):
+        calls.append((method, endpoint, data))
+        if method == "GET" and endpoint == "issues/77":
+            return json.dumps(_specs_issue(body)), "", 0
+        pytest.fail(f"malformed index must stop before {method} {endpoint}")
+
+    monkeypatch.setattr(gh, "get_owner_repo", lambda: "acme/widgets")
+    monkeypatch.setattr(gh, "api", fake_api)
+    monkeypatch.setattr(
+        gh,
+        "check_file",
+        lambda path: pytest.fail("malformed index must not read documents"),
+    )
+
+    with pytest.raises(SystemExit) as error:
+        gh.cmd_specs_publish(_specs_args(paths))
+
+    assert error.value.code == 1
+    assert calls == [("GET", "issues/77", None)]
 
 
 @pytest.mark.parametrize(
@@ -754,45 +915,6 @@ def test_specs_publish_rejects_non_spec_issue_before_documents_or_writes(
     assert message in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("current,revision", [("1", 1), ("2", 1), ("2", 2)])
-def test_specs_publish_rejects_duplicate_or_stale_revision_before_posting(
-    monkeypatch, tmp_path, current, revision
-):
-    paths = {}
-    for name in ("spec", "design", "plan", "task"):
-        path = tmp_path / f"{name}.md"
-        path.write_text(f"{name} content", encoding="utf-8")
-        paths[name] = str(path)
-    calls = []
-
-    def fake_api(method, endpoint, data=None, **kwargs):
-        calls.append((method, endpoint, data))
-        return (
-            json.dumps(
-                {
-                    "state": "open",
-                    "labels": [{"name": "spec"}],
-                    "body": (
-                        "Primary Issue: #20\n\n"
-                        f"**Current Revision**: {current}\n\n## Revision History\n"
-                    ),
-                }
-            ),
-            "",
-            0,
-        )
-
-    monkeypatch.setattr(gh, "check_file", lambda path: True)
-    monkeypatch.setattr(gh, "api", fake_api)
-
-    with pytest.raises(SystemExit):
-        gh.cmd_specs_publish(
-            argparse.Namespace(number=77, revision=revision, primary=20, format="json", **paths)
-        )
-
-    assert [call for call in calls if call[0] == "POST"] == []
-
-
 @pytest.mark.parametrize(
     "body",
     [
@@ -829,97 +951,75 @@ def test_specs_publish_rejects_noncanonical_primary_marker(
     assert "does not identify the primary issue" in capsys.readouterr().err
 
 
-def test_specs_publish_rejects_duplicate_current_revision_before_documents(
-    monkeypatch, capsys, tmp_path
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Primary Issue: #20\n\n## Documents\n\n- spec: https://github.com/acme/widgets/issues/77#issuecomment-1\n",
+        _specs_index(
+            {
+                "spec": _specs_url(1),
+                "design": _specs_url(1),
+                "plan": _specs_url(3),
+                "task": _specs_url(4),
+            }
+        ),
+        _specs_index(
+            {
+                "spec": _specs_url(1, "other/widgets"),
+                "design": _specs_url(2),
+                "plan": _specs_url(3),
+                "task": _specs_url(4),
+            }
+        ),
+    ],
+)
+def test_specs_publish_rejects_malformed_duplicate_or_foreign_index_before_writes(
+    monkeypatch, tmp_path, body
 ):
-    paths = {
-        name: str(tmp_path / f"{name}.md")
-        for name in ("spec", "design", "plan", "task")
-    }
+    paths = _specs_paths(tmp_path)
     calls = []
-    body = (
-        "Primary Issue: #20\n\n**Current Revision**: none\n\n"
-        "**Current Revision**: none\n\n## Revision History\n"
-    )
 
     def fake_api(method, endpoint, data=None, **kwargs):
         calls.append((method, endpoint, data))
-        if method == "GET" and endpoint == "issues/77":
-            return json.dumps({"state": "open", "labels": [{"name": "spec"}], "body": body}), "", 0
-        pytest.fail(f"duplicate revision markers must stop before {method} {endpoint}")
+        if endpoint == "issues/77":
+            return json.dumps(_specs_issue(body)), "", 0
+        pytest.fail(f"invalid index must stop before {method} {endpoint}")
 
+    monkeypatch.setattr(gh, "get_owner_repo", lambda: "acme/widgets")
     monkeypatch.setattr(gh, "api", fake_api)
-    monkeypatch.setattr(
-        gh,
-        "check_file",
-        lambda path: pytest.fail("duplicate revision markers must not read documents"),
-    )
 
-    with pytest.raises(SystemExit) as error:
-        gh.cmd_specs_publish(
-            argparse.Namespace(number=77, revision=1, primary=20, format="json", **paths)
-        )
+    with pytest.raises(SystemExit):
+        gh.cmd_specs_publish(_specs_args(paths))
 
-    assert error.value.code == 1
     assert calls == [("GET", "issues/77", None)]
-    assert "exactly one valid current-revision marker" in capsys.readouterr().err
 
 
-def test_specs_publish_accepts_the_next_sequential_revision(monkeypatch, capsys, tmp_path):
-    paths = {}
-    for name in ("spec", "design", "plan", "task"):
-        path = tmp_path / f"{name}.md"
-        path.write_text(f"{name} content", encoding="utf-8")
-        paths[name] = str(path)
+def test_specs_publish_rejects_deleted_indexed_comment_before_writes(
+    monkeypatch, tmp_path
+):
+    paths = _specs_paths(tmp_path)
+    documents = {name: _specs_url(index) for index, name in enumerate(paths, 1)}
     calls = []
 
     def fake_api(method, endpoint, data=None, **kwargs):
         calls.append((method, endpoint, data))
-        if method == "GET" and endpoint == "issues/77":
-            return (
-                json.dumps(
-                    {
-                        "state": "open",
-                        "labels": [{"name": "spec"}],
-                        "body": (
-                            "Primary Issue: #20\n\n**Current Revision**: 1\n\n"
-                            "## Revision History\n"
-                        ),
-                    }
-                ),
-                "",
-                0,
-            )
+        if endpoint == "issues/77":
+            return json.dumps(_specs_issue(_specs_index(documents))), "", 0
         if method == "GET":
-            return "[]", "", 0
-        if method == "POST":
-            return (
-                json.dumps(
-                    {
-                        "html_url": (
-                            "https://github.com/acme/widgets/issues/77"
-                            f"#issuecomment-{len(calls)}"
-                        )
-                    }
-                ),
-                "",
-                0,
-            )
-        return "{}", "", 0
+            return json.dumps(_specs_comments(documents)[:-1]), "", 0
+        pytest.fail(f"missing comment must stop before {method} {endpoint}")
 
-    monkeypatch.setattr(gh, "check_file", lambda path: True)
+    monkeypatch.setattr(gh, "get_owner_repo", lambda: "acme/widgets")
     monkeypatch.setattr(gh, "api", fake_api)
 
-    gh.cmd_specs_publish(
-        argparse.Namespace(number=77, revision=2, primary=20, format="json", **paths)
-    )
+    with pytest.raises(SystemExit):
+        gh.cmd_specs_publish(_specs_args(paths))
 
-    assert json.loads(capsys.readouterr().out)["revision"] == 2
-    assert "Current Revision**: 2" in calls[-1][2]["body"]
+    assert [call for call in calls if call[0] in {"PATCH", "POST", "DELETE"}] == []
 
 
 @pytest.mark.parametrize("failure_after", [0, 1, 2, 3, "index"])
-def test_specs_publish_resumes_partial_revision_without_duplicate_comments(
+def test_specs_publish_resumes_partial_initialization_without_duplicate_comments(
     monkeypatch, capsys, tmp_path, failure_after
 ):
     paths = {}
@@ -930,7 +1030,7 @@ def test_specs_publish_resumes_partial_revision_without_duplicate_comments(
     comments = []
     post_attempts = 0
     fail_once = True
-    index = "Primary Issue: #20\n\n**Current Revision**: none\n\n## Revision History\n"
+    index = "# Specs: Ship widgets\n\nPrimary Issue: #20\n"
 
     def fake_api(method, endpoint, data=None, **kwargs):
         nonlocal fail_once, index, post_attempts
@@ -959,9 +1059,9 @@ def test_specs_publish_resumes_partial_revision_without_duplicate_comments(
         index = data["body"]
         return "{}", "", 0
 
-    monkeypatch.setattr(gh, "check_file", lambda path: True)
+    monkeypatch.setattr(gh, "get_owner_repo", lambda: "acme/widgets")
     monkeypatch.setattr(gh, "api", fake_api)
-    args = argparse.Namespace(number=77, revision=1, primary=20, format="json", **paths)
+    args = _specs_args(paths)
 
     with pytest.raises(SystemExit):
         gh.cmd_specs_publish(args)
@@ -970,7 +1070,90 @@ def test_specs_publish_resumes_partial_revision_without_duplicate_comments(
 
     assert len(comments) == 4
     assert len({comment["body"] for comment in comments}) == 4
-    assert "Current Revision**: 1" in index
+    assert index == _specs_index(
+        {name: _specs_url(number) for number, name in enumerate(paths, 1)},
+        "# Specs: Ship widgets\n\nPrimary Issue: #20",
+    )
+
+
+def test_specs_publish_retries_only_unfinished_indexed_comment_updates(
+    monkeypatch, capsys, tmp_path
+):
+    paths = _specs_paths(tmp_path)
+    documents = {name: _specs_url(index) for index, name in enumerate(paths, 1)}
+    comments = _specs_comments(documents)
+    Path(paths["spec"]).write_text("changed spec", encoding="utf-8")
+    Path(paths["design"]).write_text("changed design", encoding="utf-8")
+    calls = []
+    fail_design_once = True
+
+    def fake_api(method, endpoint, data=None, **kwargs):
+        nonlocal fail_design_once
+        calls.append((method, endpoint, data))
+        if method == "GET" and endpoint == "issues/77":
+            return json.dumps(_specs_issue(_specs_index(documents))), "", 0
+        if method == "GET":
+            return json.dumps(comments), "", 0
+        if endpoint == "issues/comments/2" and fail_design_once:
+            fail_design_once = False
+            return "", "transient failure", 1
+        comment_id = int(endpoint.rsplit("/", 1)[1])
+        comments[comment_id - 1]["body"] = data["body"]
+        return "{}", "", 0
+
+    monkeypatch.setattr(gh, "get_owner_repo", lambda: "acme/widgets")
+    monkeypatch.setattr(gh, "api", fake_api)
+    args = _specs_args(paths, revision=8)
+
+    with pytest.raises(SystemExit):
+        gh.cmd_specs_publish(args)
+    capsys.readouterr()
+    gh.cmd_specs_publish(args)
+
+    result = json.loads(capsys.readouterr().out)
+    assert result == {"documents": documents, "number": 77, "revision": 8}
+    assert [call[1] for call in calls if call[0] == "PATCH"] == [
+        "issues/comments/1",
+        "issues/comments/2",
+        "issues/comments/2",
+    ]
+    assert [comment["body"] for comment in comments[:2]] == [
+        "## Spec\n\nchanged spec",
+        "## Design\n\nchanged design",
+    ]
+    assert [call for call in calls if call[0] in {"POST", "DELETE"}] == []
+    assert not any(
+        method == "PATCH" and endpoint == "issues/77" for method, endpoint, _ in calls
+    )
+
+
+def test_specs_publish_rejects_duplicate_partial_initialization_comments(
+    monkeypatch, tmp_path
+):
+    paths = _specs_paths(tmp_path)
+    duplicate = {"body": "## Spec\n\nspec content", "html_url": _specs_url(1)}
+    calls = []
+
+    def fake_api(method, endpoint, data=None, **kwargs):
+        calls.append((method, endpoint, data))
+        if endpoint == "issues/77":
+            body = "# Specs: Ship widgets\n\nPrimary Issue: #20\n"
+            return json.dumps(_specs_issue(body)), "", 0
+        if method == "GET":
+            return (
+                json.dumps([duplicate, duplicate | {"html_url": _specs_url(2)}]),
+                "",
+                0,
+            )
+        pytest.fail(f"duplicate partial comments must stop before {method} {endpoint}")
+
+    monkeypatch.setattr(gh, "get_owner_repo", lambda: "acme/widgets")
+    monkeypatch.setattr(gh, "api", fake_api)
+
+    with pytest.raises(SystemExit):
+        gh.cmd_specs_publish(_specs_args(paths))
+
+    assert [call for call in calls if call[0] in {"PATCH", "POST", "DELETE"}] == []
 
 
 def test_create_issue_unclaimed_omits_assignees(monkeypatch, capsys):

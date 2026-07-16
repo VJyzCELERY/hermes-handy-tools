@@ -1,5 +1,5 @@
 ---
-description: Creates remote Specs revisions or explicit local planning artifacts
+description: Creates or updates remote indexed Specs documents or explicit local planning artifacts
 subtask: true
 ---
 
@@ -14,7 +14,7 @@ PRIMARY=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 TARGET_RESULT=$(cd "$PRIMARY" && uv run python .agents/scripts/resolve-target-worktree.py "$TARGET")
 ```
 
-Require one returned worktree path for the resolved target, then perform every state, artifact, and template operation from that returned worktree. The default profile is remote. Create the four complete documents from the templates under `./tmp/` and resolve every clarification marker. Preview the exact remote Specs mutations: `specs ensure` may create the `spec` label, create or reuse the Specs issue, and link the primary issue; `specs publish` will append up to four document comments and update the Specs revision index. Require fresh remote-write confirmation immediately before that batch, except when inherited `--auto` authorizes the previewed batch. Then use `uv run python .agents/scripts/gh.py specs ensure <primary-issue> <primary-title> --format json`, which links the primary issue to its Specs issue, and `uv run python .agents/scripts/gh.py specs publish <specs-number> --primary <primary-number> --revision <next-revision> --spec <spec> --design <design> --plan <plan> --task <task> --format json`. Record the complete validated issue, index, and document comment references with `workflow_state.py set-specs`; remove temporary documents after state is written. Do not create local canonical planning paths in the remote profile.
+Require one returned worktree path for the resolved target, then perform every state, artifact, and template operation from that returned worktree. The default profile is remote. Create the four complete documents from the templates under `./tmp/` and resolve every clarification marker. Preview the exact remote Specs mutations: `specs ensure` may create the `spec` label, create or reuse the Specs issue, and link the primary issue; `specs publish` will create only missing canonical document comments, write the completed Specs index once, and edit only changed indexed comments. Require fresh remote-write confirmation immediately before that batch, except when inherited `--auto` authorizes the previewed batch. Then use `uv run python .agents/scripts/gh.py specs ensure <primary-issue> <primary-title> --format json`, which links the primary issue to its Specs issue, and `uv run python .agents/scripts/gh.py specs publish <specs-number> --primary <primary-number> --revision <next-revision> --spec <spec> --design <design> --plan <plan> --task <task> --format json`. Record the complete validated issue, index, and stable document comment references with `workflow_state.py set-specs`; revision remains ignored local workflow metadata. Remove temporary documents after state is written. Do not create local canonical planning paths in the remote profile.
 
 An explicit ignored `.agents/local/planning-profile.json` containing `{"profile":"local"}` is reserved for development of this template repository. Only this local profile uses the prior issue-keyed `.agents/local/state/artifacts/` flow and `uv run python .agents/scripts/workflow_state.py set-artifacts OWNER/REPO#NUMBER --directory <directory> --spec <spec> --design <design> --plan <plan> --task <task> --format json`. In either profile, after all records validate, run `uv run python .agents/scripts/workflow_state.py transition OWNER/REPO#NUMBER planned --status active --clear-pending-action --format json`. Do not change source code.
 
@@ -24,7 +24,7 @@ An explicit ignored `.agents/local/planning-profile.json` containing `{"profile"
 
 ## Mutations
 
-- Remote profile: may create the `spec` label and Specs issue, link the primary issue, append up to four document comments, update the Specs revision index, and write Specs references and planning phase to ignored local state.
+- Remote profile: may create the `spec` label and Specs issue, link the primary issue, create missing canonical comments, initialize one stable Specs index, edit changed indexed comments, and write Specs references and planning phase to ignored local state.
 - Local profile: creates or updates only state artifacts `spec.md`, `design.md`, `implementation-plan.md`, and `task.md` in the issue's ignored artifact directory, plus artifact paths and planning phase in state.
 
 ## Confirmation
