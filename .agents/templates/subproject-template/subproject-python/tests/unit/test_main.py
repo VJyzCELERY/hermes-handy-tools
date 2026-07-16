@@ -1,2 +1,4 @@
-def test_example():
-    assert 1 + 1 == 2
+def test_package_imports():
+    import sub_project
+
+    assert sub_project is not None

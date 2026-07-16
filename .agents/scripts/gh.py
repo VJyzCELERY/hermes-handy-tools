@@ -42,15 +42,23 @@ Usage:
 <EOF_DESC>
 """
 
-import json, os, re, subprocess, sys, time, urllib.parse, argparse
+import argparse
+import json
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.parse
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from cli_common import EXIT_PARTIAL
 import repo_guard
 
 
-TMP_DIR = Path("./tmp")
-TMP_DIR.mkdir(parents=True, exist_ok=True)
+TMP_DIR = repo_guard.repo_root() / "tmp"
 
 
 def run(cmd, input_data=None, check=True):
@@ -83,6 +91,19 @@ def parse_pr_input(arg: str) -> str:
     sys.exit(f"Could not parse PR number from: {arg}")
 
 
+def parse_issue_input(arg: str) -> tuple[str, str | None]:
+    """Parse an issue number and optional repository from an issue reference."""
+    arg = arg.strip()
+    match = re.fullmatch(
+        r"https://github\.com/([^/]+)/([^/]+)/issues/(\d+)/?", arg
+    )
+    if match:
+        return match.group(3), f"{match.group(1)}/{match.group(2)}"
+    if arg.isdigit():
+        return arg, None
+    sys.exit(f"Could not parse issue number from: {arg}")
+
+
 def parse_url_input(url: str) -> dict:
     """Parse a full GitHub URL to extract type and ID.
     
@@ -97,10 +118,10 @@ def parse_url_input(url: str) -> dict:
     # Check for fragment identifiers
     frag = urllib.parse.urlparse(url).fragment
     if frag:
-        fm = re.match(r"(issue|pullrequestreview|discussionrereview)-(\d+)", frag)
+        fm = re.match(r"(issue|pullrequestreview)-(\d+)|discussion_r(\d+)", frag)
         if fm:
-            result["type"] = fm.group(1)
-            result["id"] = fm.group(2)
+            result["type"] = fm.group(1) or "discussion_r"
+            result["id"] = fm.group(2) or fm.group(3)
     return result
 
 
@@ -119,22 +140,147 @@ def api(method: str, endpoint: str, data: dict | None = None, input_file: str | 
             cmd.extend(["-f", f"{k}={v}"])
     
     out, err, rc = run(cmd)
+    if paginate and rc == 0:
+        try:
+            decoder = json.JSONDecoder()
+            pages = []
+            position = 0
+            while position < len(out):
+                position = len(out) - len(out[position:].lstrip())
+                if position == len(out):
+                    break
+                page, position = decoder.raw_decode(out, position)
+                if not isinstance(page, list):
+                    raise TypeError
+                pages.extend(page)
+            out = json.dumps(pages)
+        except (json.JSONDecodeError, TypeError):
+            pass
     return out, err, rc
 
 
+def authenticated_login() -> str:
+    """Return the active GitHub login or fail before a remote mutation."""
+    out, err, rc = run(["gh", "api", "user", "--jq", ".login"])
+    login = out.strip()
+    if rc or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", login):
+        detail = err or "empty or malformed response"
+        print(
+            f"[FAIL] Could not resolve authenticated GitHub login: {detail}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return login
+
+
+def add_assignees(number: int, assignees: list[str]) -> None:
+    """Add assignees to an issue or PR without replacing existing assignees."""
+    data = {"assignees": assignees}
+    with generated_payload("gh-assignees-", data) as payload:
+        owner_repo = get_owner_repo()
+        out, err, rc = run(
+            [
+                "gh",
+                "api",
+                f"repos/{owner_repo}/issues/{number}/assignees",
+                "--method",
+                "POST",
+                "--input",
+                str(payload),
+            ]
+        )
+    if rc:
+        print(f"[FAIL] Could not assign #{number}: {err or out}", file=sys.stderr)
+        sys.exit(1)
+
+
+def claim_number(number: int, actor: str | None = None) -> dict:
+    """Idempotently assign the authenticated actor to an issue or PR."""
+    actor = actor or authenticated_login()
+
+    def current() -> tuple[str, list[str]]:
+        out, err, rc = api("GET", f"issues/{number}")
+        if rc:
+            print(f"[FAIL] Could not fetch #{number} for claim: {err}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            item = json.loads(out)
+            url = item["html_url"]
+            assignees = [entry["login"] for entry in item["assignees"]]
+            if not isinstance(url, str) or not url or not all(
+                isinstance(login, str) and login for login in assignees
+            ):
+                raise TypeError
+        except (json.JSONDecodeError, KeyError, TypeError):
+            print("[FAIL] GitHub returned malformed assignee JSON", file=sys.stderr)
+            sys.exit(1)
+        return url, assignees
+
+    url, assignees = current()
+    action = "unchanged"
+    if actor not in assignees:
+        add_assignees(number, [actor])
+        url, assignees = current()
+        if actor not in assignees:
+            print(f"[FAIL] Assignment of #{number} could not be verified", file=sys.stderr)
+            sys.exit(1)
+        action = "claimed"
+    return {
+        "action": action,
+        "number": number,
+        "url": url,
+        "actor": actor,
+        "assignees": assignees,
+    }
+
+
+def cmd_claim(args):
+    """Claim an issue or PR for the authenticated GitHub actor."""
+    result = claim_number(args.number)
+    if args.format == "json":
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    else:
+        print(f"[OK] #{args.number} {result['action']} by {result['actor']}")
+
+
 def clean_temp(path: str | Path):
-    """Delete temp file if it exists."""
+    """Delete regular files owned by the repository temp directory."""
     p = Path(path)
-    if p.exists():
-        repo_guard.assert_inside_repo(p)
+    try:
+        p.resolve().relative_to(TMP_DIR.resolve())
+    except ValueError:
+        return
+    if p.is_file():
         p.unlink()
 
 
+@contextmanager
+def generated_payload(prefix: str, data: dict):
+    """Create a collision-safe JSON payload and always remove it."""
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=TMP_DIR,
+            prefix=prefix,
+            suffix=".json",
+            delete=False,
+        ) as payload_file:
+            path = Path(payload_file.name)
+            json.dump(data, payload_file)
+        yield path
+    finally:
+        if path is not None:
+            clean_temp(path)
+
+
 def check_file(path: str) -> bool:
-    """Validate file exists and has content."""
+    """Validate path is a regular, nonempty repository file."""
     p = repo_guard.assert_inside_repo(path)
-    if not p.exists():
-        print(f"[FAIL] File not found: {path}", file=sys.stderr)
+    if not p.is_file():
+        print(f"[FAIL] Not a regular file: {path}", file=sys.stderr)
         return False
     if p.stat().st_size == 0:
         print(f"[FAIL] File is empty: {path}", file=sys.stderr)
@@ -174,7 +320,6 @@ def validate_pr_body(body: str) -> list[str]:
 
 def cmd_fetch_prs(args):
     """List PRs with optional filters."""
-    owner_repo = get_owner_repo()
     cmd = ["gh", "pr", "list", "--json",
            "number,title,state,headRefName,baseRefName,author,createdAt,updatedAt,mergeable,isDraft"]
     if args.head:
@@ -245,6 +390,9 @@ def cmd_fetch_pr(args):
         sys.exit(1)
     try:
         data = json.loads(out)
+        if args.format in ("json", "raw"):
+            print(out)
+            return
         if args.fields:
             print(json_to_md(data))
             return
@@ -279,7 +427,7 @@ def cmd_fetch_pr(args):
         print(f"Changes: +{data.get('additions', 0)} / -{data.get('deletions', 0)} ({data.get('changedFiles', 0)} files)")
         labels = data.get('labels', [])
         if labels:
-            print(f"Labels: {', '.join(l.get('name', '') for l in labels)}")
+            print(f"Labels: {', '.join(label.get('name', '') for label in labels)}")
         
         # Title section
         print("---")
@@ -297,39 +445,47 @@ def cmd_fetch_pr(args):
         
         print(f"\n[INFO] Use --json to specify custom fields: gh.py fetch pr {pr} --json number,title,state")
     except json.JSONDecodeError:
-        print(out)
+        print(f"[FAIL] GitHub returned malformed JSON for PR #{pr}", file=sys.stderr)
+        sys.exit(1)
 
 
 def cmd_fetch_comments(args):
     pr = parse_pr_input(args.pr_or_url)
-    
-    # Get PR info for branch name
-    pr_info = {}
-    out, err, rc = api("GET", f"pulls/{pr}")
-    if rc == 0:
+
+    fetched = {}
+    for endpoint, expected_type in (
+        (f"pulls/{pr}", dict),
+        (f"pulls/{pr}/comments", list),
+        (f"pulls/{pr}/reviews", list),
+    ):
+        out, err, rc = api("GET", endpoint, paginate=endpoint != f"pulls/{pr}")
+        if rc != 0:
+            print(f"[FAIL] Could not fetch {endpoint}: {err}", file=sys.stderr)
+            sys.exit(1)
         try:
-            pr_info = json.loads(out)
+            fetched[endpoint] = json.loads(out)
         except json.JSONDecodeError:
-            pass
+            print(f"[FAIL] GitHub returned malformed JSON for {endpoint}", file=sys.stderr)
+            sys.exit(1)
+        if not isinstance(fetched[endpoint], expected_type):
+            print(f"[FAIL] GitHub returned unexpected JSON for {endpoint}", file=sys.stderr)
+            sys.exit(1)
+
+    pr_info = fetched[f"pulls/{pr}"]
     branch = pr_info.get("head", {}).get("ref", f"PR-{pr}")
     base_sha = pr_info.get("base", {}).get("sha", "")
     head_sha = pr_info.get("head", {}).get("sha", "")
-    safe_branch = branch.replace("/", "-")
+    safe_branch = branch.replace("/", "_")
     ts = int(time.time())
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     
-    out_dir = Path("reviews") / "remote"
+    out_dir = repo_guard.assert_inside_repo(Path("reviews") / "remote")
     out_dir.mkdir(parents=True, exist_ok=True)
-    output_path = args.output or str(out_dir / f"REVIEW_{safe_branch}_fetched_{ts}.md")
+    output_path = repo_guard.assert_inside_repo(
+        args.output or out_dir / f"REVIEW_{safe_branch}_fetched_{ts}.md"
+    )
     
-    # Fetch all inline comments
-    all_comments_raw = []
-    out, err, rc = api("GET", f"pulls/{pr}/comments", paginate=True)
-    if rc == 0:
-        try:
-            all_comments_raw = json.loads(out)
-        except json.JSONDecodeError:
-            pass
+    all_comments_raw = fetched[f"pulls/{pr}/comments"]
     
     # Filter out minimized/resolved comments by default, unless --all is given
     include_minimized = getattr(args, "all", False)
@@ -348,14 +504,7 @@ def cmd_fetch_comments(args):
                 continue
             all_comments.append(c)
     
-    # Fetch all reviews
-    all_reviews = []
-    out, err, rc = api("GET", f"pulls/{pr}/reviews", paginate=True)
-    if rc == 0:
-        try:
-            all_reviews = json.loads(out)
-        except json.JSONDecodeError:
-            pass
+    all_reviews = fetched[f"pulls/{pr}/reviews"]
     
     # Separate reviews that have a body (meaningful review) vs empty ones
     meaningful_reviews = [r for r in all_reviews if r.get("body", "").strip()]
@@ -363,22 +512,12 @@ def cmd_fetch_comments(args):
     # Filter out minimized reviews (REST API doesn't reflect GraphQL minimization)
     if not include_minimized and meaningful_reviews:
         # Batch query GraphQL to check which reviews are minimized
-        review_nodes = " ".join(f'_{i}: node(id: "{r["node_id"]}") {{ ... on PullRequestReview {{ isMinimized }} }}' for i, r in enumerate(meaningful_reviews[:50]))
-        gql_query = f"query {{ {review_nodes} }}"
-        cmd = ["gh", "api", "graphql", "-f", f"query={gql_query}"]
-        gout, _, grc = run(cmd)
-        if grc == 0 and gout:
-            try:
-                gdata = json.loads(gout)["data"]
-                filtered = []
-                for i, r in enumerate(meaningful_reviews):
-                    key = f"_{i}"
-                    is_minimized = gdata.get(key, {}).get("isMinimized", False)
-                    if not is_minimized:
-                        filtered.append(r)
-                meaningful_reviews = filtered
-            except (KeyError, json.JSONDecodeError):
-                pass
+        minimized = fetch_review_minimization(meaningful_reviews)
+        meaningful_reviews = [
+            review
+            for review in meaningful_reviews
+            if not minimized.get(review["node_id"], False)
+        ]
     
     # --urls-only: output JSON lines of filtered review + comment URLs and exit
     urls_only = getattr(args, "urls_only", False)
@@ -427,8 +566,6 @@ def cmd_fetch_comments(args):
     
     # Orphan comments (no parent review)
     for c in orphan_comments + sum(comments_by_review.values(), []):
-        if c not in orphan_comments:
-            continue
         loc = f"{c.get('path','?')}:{c.get('line','?')}"
         c_url = c.get("html_url", "?")
         c_author = c.get("user", {}).get("login", "?")
@@ -444,8 +581,7 @@ def cmd_fetch_comments(args):
     report += "---\n\n"
     report += separator.join(sections) if sections else "No reviews found on this PR."
     
-    output_path = str(repo_guard.assert_inside_repo(output_path))
-    Path(output_path).write_text(report, encoding="utf-8")
+    output_path.write_text(report, encoding="utf-8")
     label = f"{len(all_comments)} active" if not include_minimized else f"{len(all_comments)} total"
     print(f"[OK] Fetched {len(meaningful_reviews)} review(s) with {label} inline comment(s) → {output_path}")
     
@@ -478,6 +614,114 @@ def cmd_fetch_comments(args):
                 print(f"    {line}")
 
 
+def cmd_fetch_review_state(args):
+    """Emit authoritative repository, PR, actor, and feedback authorization state."""
+    pr = parse_pr_input(args.pr_or_url)
+    owner_repo = get_owner_repo()
+    actor_out, actor_err, actor_rc = run(["gh", "api", "user", "--jq", ".login"])
+    pr_out, pr_err, pr_rc = api("GET", f"pulls/{pr}")
+    comments_out, comments_err, comments_rc = api(
+        "GET", f"pulls/{pr}/comments", paginate=True
+    )
+    reviews_out, reviews_err, reviews_rc = api(
+        "GET", f"pulls/{pr}/reviews", paginate=True
+    )
+    if actor_rc or pr_rc or comments_rc or reviews_rc:
+        error = actor_err or pr_err or comments_err or reviews_err
+        print(f"[FAIL] Could not inspect review state: {error}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        pr_data = json.loads(pr_out)
+        comments = json.loads(comments_out)
+        reviews = json.loads(reviews_out)
+        if not isinstance(pr_data, dict) or not isinstance(comments, list) or not isinstance(reviews, list):
+            raise TypeError
+    except (json.JSONDecodeError, TypeError):
+        print("[FAIL] GitHub returned malformed review inspection JSON", file=sys.stderr)
+        sys.exit(1)
+
+    thread_map = fetch_thread_map(owner_repo, pr)
+    minimized_reviews = fetch_review_minimization(reviews)
+    by_id = {comment.get("id"): comment for comment in comments}
+
+    def root_id(comment):
+        current = comment
+        seen = set()
+        while current.get("in_reply_to_id") in by_id and current["in_reply_to_id"] not in seen:
+            seen.add(current["in_reply_to_id"])
+            current = by_id[current["in_reply_to_id"]]
+        return current.get("id")
+
+    chains = {}
+    for comment in comments:
+        chains.setdefault(root_id(comment), []).append(comment)
+    items = []
+    for comment in comments:
+        info = thread_map.get(str(comment.get("id")), {})
+        if comment.get("in_reply_to_id"):
+            continue
+        chain = chains.get(comment.get("id"), [comment])
+        items.append({
+            "url": comment.get("html_url"),
+            "author": comment.get("user", {}).get("login"),
+            "author_type": comment.get("user", {}).get("type"),
+            "active_human": not info.get("is_resolved", False)
+            and not info.get("is_minimized", False)
+            and any(
+                entry.get("user", {}).get("type") == "User"
+                and entry.get("user", {}).get("login") != actor_out
+                for entry in chain
+            ),
+            "bodies": [entry.get("body", "") for entry in chain],
+            "active": not info.get("is_resolved", False)
+            and not info.get("is_minimized", False),
+        })
+    for review in reviews:
+        if not review.get("body", "").strip():
+            continue
+        items.append({
+            "url": review.get("html_url"),
+            "author": review.get("user", {}).get("login"),
+            "author_type": review.get("user", {}).get("type"),
+            "active_human": not minimized_reviews.get(review.get("node_id"), False)
+            and review.get("user", {}).get("type") == "User"
+            and review.get("user", {}).get("login") != actor_out,
+            "bodies": [review.get("body", "")],
+            "active": not minimized_reviews.get(review.get("node_id"), False),
+        })
+    print(json.dumps({
+        "repository": f"https://github.com/{owner_repo}",
+        "pull_request": pr_data.get("html_url"),
+        "head": pr_data.get("head", {}).get("sha"),
+        "actor": actor_out,
+        "items": items,
+    }, sort_keys=True))
+
+
+def fetch_review_minimization(reviews: list[dict]) -> dict[str, bool]:
+    """Fetch minimization state for every review in bounded GraphQL batches."""
+    result = {}
+    with_nodes = [review for review in reviews if review.get("node_id")]
+    for start in range(0, len(with_nodes), 50):
+        batch = with_nodes[start : start + 50]
+        nodes = " ".join(
+            f'_{i}: node(id: "{review["node_id"]}") {{ ... on PullRequestReview {{ isMinimized }} }}'
+            for i, review in enumerate(batch)
+        )
+        out, err, rc = run(["gh", "api", "graphql", "-f", f"query=query {{ {nodes} }}"])
+        if rc:
+            print(f"[FAIL] Could not fetch review minimization state: {err}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            data = json.loads(out)["data"]
+            for i, review in enumerate(batch):
+                result[review["node_id"]] = data[f"_{i}"]["isMinimized"]
+        except (KeyError, TypeError, json.JSONDecodeError):
+            print("[FAIL] GitHub returned malformed review state JSON", file=sys.stderr)
+            sys.exit(1)
+    return result
+
+
 # ─── Post Commands ─────────────────────────────────────────────
 
 def cmd_post_review(args):
@@ -504,15 +748,11 @@ def cmd_post_review(args):
             "event": event,
             "comments": comments
         }
-        tf = TMP_DIR / f"gh-review-payload-{int(time.time())}.json"
-        with open(tf, "w") as f:
-            json.dump(payload, f)
-        
-        OWNER_REPO = get_owner_repo()
-        cmd = ["gh", "api", f"repos/{OWNER_REPO}/pulls/{pr}/reviews",
-               "--method", "POST", "--input", str(tf)]
-        out, err, rc = run(cmd)
-        clean_temp(tf)
+        with generated_payload("gh-review-payload-", payload) as tf:
+            OWNER_REPO = get_owner_repo()
+            cmd = ["gh", "api", f"repos/{OWNER_REPO}/pulls/{pr}/reviews",
+                   "--method", "POST", "--input", str(tf)]
+            out, err, rc = run(cmd)
     else:
         data = {"body": body, "event": event}
         out, err, rc = api("POST", f"pulls/{pr}/reviews", data)
@@ -530,14 +770,11 @@ def cmd_post_review(args):
                 "event": "COMMENT",
                 "comments": comments
             }
-            tf = TMP_DIR / f"gh-review-payload-{int(time.time())}.json"
-            with open(tf, "w") as f:
-                json.dump(payload, f)
-            OWNER_REPO = get_owner_repo()
-            cmd = ["gh", "api", f"repos/{OWNER_REPO}/pulls/{pr}/reviews",
-                   "--method", "POST", "--input", str(tf)]
-            out, err, rc = run(cmd)
-            clean_temp(tf)
+            with generated_payload("gh-review-payload-", payload) as tf:
+                OWNER_REPO = get_owner_repo()
+                cmd = ["gh", "api", f"repos/{OWNER_REPO}/pulls/{pr}/reviews",
+                       "--method", "POST", "--input", str(tf)]
+                out, err, rc = run(cmd)
         else:
             data = {"body": body, "event": "COMMENT"}
             out, err, rc = api("POST", f"pulls/{pr}/reviews", data)
@@ -545,11 +782,6 @@ def cmd_post_review(args):
     if rc != 0:
         print(f"[FAIL] Review post failed: {err}", file=sys.stderr)
         sys.exit(1)
-    
-    # Auto-clean temp files on success
-    clean_temp(body_file)
-    if comments_file:
-        clean_temp(comments_file)
     
     # Parse response to extract review URL and ID
     review_url = ""
@@ -581,16 +813,16 @@ def cmd_post_review(args):
                 pass
     
     print(f"[OK] Review posted to PR #{pr}")
-    print(f"")
+    print("")
     print(f"**PR Review URL**: {review_url}")
-    print(f"")
+    print("")
     for e in comment_entries:
         loc = f"{e['path']}:{e['line']}"
         print(f"**PR Comment**: {e['url']}")
         print(f"**Location**: {loc}")
         for line in e['body'].split("\n"):
             print(f"  {line}")
-        print(f"")
+        print("")
 
 
 def cmd_post_comment(args):
@@ -605,7 +837,6 @@ def cmd_post_comment(args):
         print(f"[FAIL] Comment post failed: {err}", file=sys.stderr)
         sys.exit(1)
     
-    clean_temp(body_file)
     print(f"[OK] Comment posted to PR #{pr}")
 
 
@@ -646,7 +877,6 @@ def cmd_post_inline_comment(args):
         print(f"[FAIL] Inline comment failed: {err}", file=sys.stderr)
         sys.exit(1)
     
-    clean_temp(body_file)
     comment_id = ""
     try:
         comment_id = f" (#{json.loads(out).get('id', '')})"
@@ -665,26 +895,20 @@ def cmd_reply_comment(args):
         sys.exit(1)
     
     # Use JSON temp file to send in_reply_to as a proper number (the API rejects string IDs)
-    import tempfile
     data = {
         "body": open(body_file).read(),
         "in_reply_to": int(comment_id)
     }
-    tf = TMP_DIR / f"gh-reply-{int(time.time())}.json"
-    with open(tf, "w") as f:
-        json.dump(data, f)
-    
-    OWNER_REPO = get_owner_repo()
-    cmd = ["gh", "api", f"repos/{OWNER_REPO}/pulls/{pr}/comments",
-           "--method", "POST", "--input", str(tf)]
-    out, err, rc = run(cmd)
-    clean_temp(tf)
+    with generated_payload("gh-reply-", data) as tf:
+        OWNER_REPO = get_owner_repo()
+        cmd = ["gh", "api", f"repos/{OWNER_REPO}/pulls/{pr}/comments",
+               "--method", "POST", "--input", str(tf)]
+        out, err, rc = run(cmd)
     
     if rc != 0:
         print(f"[FAIL] Reply failed: {err}", file=sys.stderr)
         sys.exit(1)
     
-    clean_temp(body_file)
     print(f"[OK] Reply posted to thread #{comment_id} on PR #{pr}")
 
 
@@ -763,7 +987,6 @@ def cmd_minimize_comment(args):
           }}
         }}
         """
-        OWNER_REPO = get_owner_repo()
         cmd = ["gh", "api", "graphql", "-f", f"query={mutation}"]
         out2, err2, rc2 = run(cmd)
         if rc2 != 0:
@@ -808,7 +1031,6 @@ def cmd_unminimize_comment(args):
           }}
         }}
         """
-        OWNER_REPO = get_owner_repo()
         cmd = ["gh", "api", "graphql", "-f", f"query={mutation}"]
         out2, err2, rc2 = run(cmd)
         if rc2 != 0:
@@ -843,7 +1065,6 @@ def minimize_single_comment(pr: str, comment_id: str, classifier: str, comments_
       }}
     }}
     """
-    OWNER_REPO = get_owner_repo()
     cmd = ["gh", "api", "graphql", "-f", f"query={mutation}"]
     out2, err2, rc2 = run(cmd)
     if rc2 != 0:
@@ -885,20 +1106,26 @@ def fetch_thread_map(owner_repo: str, pr: str) -> dict:
 
     Returns: {comment_id_str: {"thread_id": str, "is_resolved": bool, "is_minimized": bool}}
     """
-    query = f"""
-    query {{
-      repository(owner: "{owner_repo.split('/')[0]}", name: "{owner_repo.split('/')[1]}") {{
+    owner, repo = owner_repo.split("/", 1)
+    thread_map = {}
+    thread_cursor = None
+    while True:
+        after = f', after: "{thread_cursor}"' if thread_cursor else ""
+        query = f"""
+        query {{
+      repository(owner: "{owner}", name: "{repo}") {{
         pullRequest(number: {pr}) {{
-          reviewThreads(first: 100) {{
+          reviewThreads(first: 100{after}) {{
             nodes {{
               id
               isResolved
-              comments(first: 20) {{
+              comments(first: 100) {{
                 nodes {{
                   id
                   fullDatabaseId
                   isMinimized
                 }}
+                pageInfo {{ hasNextPage endCursor }}
               }}
             }}
             pageInfo {{
@@ -910,29 +1137,51 @@ def fetch_thread_map(owner_repo: str, pr: str) -> dict:
       }}
     }}
     """
-    cmd = ["gh", "api", "graphql", "-f", f"query={query}"]
-    out, err, rc = run(cmd)
-    if rc != 0 or not out:
-        return {}
-    try:
-        data = json.loads(out)
-        nodes = data["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
-    except (KeyError, json.JSONDecodeError):
-        return {}
+        out, err, rc = run(["gh", "api", "graphql", "-f", f"query={query}"])
+        if rc != 0 or not out:
+            print(f"[FAIL] Could not fetch review threads: {err}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            connection = json.loads(out)["data"]["repository"]["pullRequest"]["reviewThreads"]
+            page_info = connection["pageInfo"]
+        except (KeyError, TypeError, json.JSONDecodeError):
+            print("[FAIL] GitHub returned malformed review thread JSON", file=sys.stderr)
+            sys.exit(1)
+        for thread in connection["nodes"]:
+            comments = thread["comments"]
+            _add_thread_comments(thread_map, thread, comments["nodes"])
+            comment_cursor = comments["pageInfo"].get("endCursor")
+            while comments["pageInfo"].get("hasNextPage"):
+                comments = _fetch_thread_comments(thread["id"], comment_cursor)
+                _add_thread_comments(thread_map, thread, comments["nodes"])
+                comment_cursor = comments["pageInfo"].get("endCursor")
+        if not page_info.get("hasNextPage"):
+            return thread_map
+        thread_cursor = page_info.get("endCursor")
 
-    thread_map = {}
-    for t in nodes:
-        tid = t["id"]
-        is_resolved = t["isResolved"]
-        for c in t["comments"]["nodes"]:
+
+def _fetch_thread_comments(thread_id: str, cursor: str) -> dict:
+    query = f'''query {{ node(id: "{thread_id}") {{ ... on PullRequestReviewThread {{ comments(first: 100, after: "{cursor}") {{ nodes {{ fullDatabaseId isMinimized }} pageInfo {{ hasNextPage endCursor }} }} }} }} }}'''
+    out, err, rc = run(["gh", "api", "graphql", "-f", f"query={query}"])
+    if rc:
+        print(f"[FAIL] Could not fetch nested review comments: {err}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        return json.loads(out)["data"]["node"]["comments"]
+    except (KeyError, TypeError, json.JSONDecodeError):
+        print("[FAIL] GitHub returned malformed nested comment JSON", file=sys.stderr)
+        sys.exit(1)
+
+
+def _add_thread_comments(thread_map: dict, thread: dict, comments: list[dict]) -> None:
+    for c in comments:
             cid = str(c.get("fullDatabaseId", ""))
             if cid:
                 thread_map[cid] = {
-                    "thread_id": tid,
-                    "is_resolved": is_resolved,
+                    "thread_id": thread["id"],
+                    "is_resolved": thread["isResolved"],
                     "is_minimized": c.get("isMinimized", False),
                 }
-    return thread_map
 
 
 def resolve_single_comment(pr: str, comment_id: str, thread_map: dict | None = None) -> bool:
@@ -1071,6 +1320,7 @@ def cmd_batch_close(args):
                     child_ok += 1
                 else:
                     child_fail += 1
+            fail += child_fail
             if child_comments:
                 print(f"[OK] Review #{review_id_num}: resolved {child_ok}/{len(child_comments)} inline comment(s)")
 
@@ -1083,12 +1333,11 @@ def cmd_batch_close(args):
                     fail += 1
             else:
                 print(f"[WARN] Review #{review_id_num} has no node_id, cannot minimize parent", file=sys.stderr)
-                if child_ok > 0:
-                    ok += 1
-                else:
-                    fail += 1
+                fail += 1
 
     print(f"[OK] Batch close done: {ok} succeeded, {fail} failed")
+    if fail:
+        sys.exit(EXIT_PARTIAL)
 
 
 def cmd_resolve_comment(args):
@@ -1121,7 +1370,6 @@ def cmd_update_body(args):
         print(f"[FAIL] Body update failed: {err}", file=sys.stderr)
         sys.exit(1)
     
-    clean_temp(body_file)
     print(f"[OK] PR #{pr} body updated")
 
 
@@ -1162,13 +1410,6 @@ def detect_pr_base(head: str | None = None) -> str:
             text=True, stderr=subprocess.DEVNULL).strip()
         if out:
             return out
-    except Exception:
-        pass
-
-    # Get merge-base with main as baseline
-    main_mb = ""
-    try:
-        main_mb = subprocess.check_output(["git", "merge-base", "main", branch], text=True, stderr=subprocess.DEVNULL).strip()
     except Exception:
         pass
 
@@ -1263,30 +1504,88 @@ def cmd_create_pr(args):
             print(f"       - {err}", file=sys.stderr)
         print("       Use `.agents/templates/PR-body.md` and fill in all sections.", file=sys.stderr)
         sys.exit(1)
+
+    actor = authenticated_login()
     
-    data = {"title": title, "head": head, "base": base, "body": body}
-    if args.draft:
-        data["draft"] = True
-    
-    # Use JSON temp file to avoid -f multiline issues
-    tf = TMP_DIR / f"gh-create-pr-{int(time.time())}.json"
-    with open(tf, "w") as f:
-        json.dump(data, f)
-    
-    OWNER_REPO = get_owner_repo()
-    cmd = ["gh", "api", f"repos/{OWNER_REPO}/pulls", "--method", "POST", "--input", str(tf)]
-    out, err, rc = run(cmd)
-    clean_temp(tf)
+    owner_repo = get_owner_repo()
+    owner = owner_repo.split("/", 1)[0]
+    qualified_head = urllib.parse.quote(f"{owner}:{head}", safe="")
+    out, err, rc = api("GET", f"pulls?state=open&head={qualified_head}")
     if rc != 0:
-        print(f"[FAIL] PR creation failed: {err}", file=sys.stderr)
+        print(f"[FAIL] Could not check existing PRs: {err}", file=sys.stderr)
         sys.exit(1)
-    
-    clean_temp(body_file)
     try:
-        pr_data = json.loads(out)
-        print(f"[OK] PR created: {pr_data.get('html_url', '')} ({head} → {base})")
-    except json.JSONDecodeError:
-        print(out)
+        matches = json.loads(out)
+        if not isinstance(matches, list) or len(matches) > 1:
+            raise TypeError
+    except (json.JSONDecodeError, TypeError):
+        print("[FAIL] GitHub returned malformed or nonunique open PR JSON", file=sys.stderr)
+        sys.exit(1)
+
+    desired = {"title": title, "body": body, "base": base}
+    if matches:
+        existing = matches[0]
+        try:
+            number = existing["number"]
+            url = existing["html_url"]
+            detail_out, detail_err, detail_rc = api("GET", f"pulls/{number}")
+            if detail_rc:
+                print(
+                    f"[FAIL] Could not fetch current PR state: {detail_err}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            detail = json.loads(detail_out)
+            current = {
+                "title": detail["title"],
+                "body": detail["body"],
+                "base": detail["base"]["ref"],
+            }
+            if (
+                not isinstance(number, int)
+                or not isinstance(url, str)
+                or not url
+                or not isinstance(detail["draft"], bool)
+            ):
+                raise TypeError
+        except (json.JSONDecodeError, KeyError, TypeError):
+            print("[FAIL] GitHub returned malformed open PR JSON", file=sys.stderr)
+            sys.exit(1)
+        changes = {key: value for key, value in desired.items() if current[key] != value}
+        action = "unchanged"
+        if changes:
+            out, err, rc = api("PATCH", f"pulls/{number}", changes)
+            action = "updated"
+            if rc != 0:
+                print(f"[FAIL] PR {action} failed: {err}", file=sys.stderr)
+                sys.exit(1)
+    else:
+        out, err, rc = api(
+            "POST", "pulls", {**desired, "draft": True, "head": head}
+        )
+        action = "created"
+
+    if rc != 0:
+        print(f"[FAIL] PR {action} failed: {err}", file=sys.stderr)
+        sys.exit(1)
+    if action == "created":
+        try:
+            response = json.loads(out)
+            number = response["number"]
+            url = response["html_url"]
+            if not isinstance(number, int) or not isinstance(url, str) or not url:
+                raise TypeError
+        except (json.JSONDecodeError, KeyError, TypeError):
+            print("[FAIL] GitHub returned malformed PR mutation JSON", file=sys.stderr)
+            sys.exit(1)
+
+    claim_number(number, actor)
+
+    result = {"action": action, "number": number, "url": url, "head": head, "base": base}
+    if args.format == "json":
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    else:
+        print(f"[OK] PR {action}: {url} ({head} -> {base})")
 
 
 # ─── URL-based handler ──────────────────────────────────────────
@@ -1309,8 +1608,6 @@ def cmd_handle_minimize(args):
     """Minimize a comment or review body by URL."""
     pr, cid, ctype = _parse_interact_url(args.url)
     classifier = args.classifier
-    owner_repo = get_owner_repo()
-    
     if ctype == "discussion_r":
         out, _, _ = api("GET", f"pulls/{pr}/comments", paginate=True)
         comments_cache = json.loads(out) if out else []
@@ -1347,8 +1644,6 @@ def cmd_handle_resolve(args):
 def cmd_handle_unminimize(args):
     """Unminimize a comment or review body by URL."""
     pr, cid, ctype = _parse_interact_url(args.url)
-    owner_repo = get_owner_repo()
-    
     if ctype == "discussion_r":
         out, _, _ = api("GET", f"pulls/{pr}/comments", paginate=True)
         if not out:
@@ -1402,14 +1697,11 @@ def cmd_handle_reply(args):
     if not check_file(args.body_file):
         sys.exit(1)
     data = {"body": open(args.body_file).read(), "in_reply_to": int(cid)}
-    tf = TMP_DIR / f"gh-reply-{int(time.time())}.json"
-    with open(tf, "w") as f:
-        json.dump(data, f)
-    owner_repo = get_owner_repo()
-    cmd = ["gh", "api", f"repos/{owner_repo}/pulls/{pr}/comments",
-           "--method", "POST", "--input", str(tf)]
-    out2, err2, rc2 = run(cmd)
-    clean_temp(tf)
+    with generated_payload("gh-reply-", data) as tf:
+        owner_repo = get_owner_repo()
+        cmd = ["gh", "api", f"repos/{owner_repo}/pulls/{pr}/comments",
+               "--method", "POST", "--input", str(tf)]
+        out2, err2, rc2 = run(cmd)
     if rc2 != 0:
         print(f"[FAIL] Reply failed: {err2}", file=sys.stderr)
         sys.exit(1)
@@ -1437,6 +1729,16 @@ def cmd_fetch_url(args):
                 sys.exit(1)
             except json.JSONDecodeError:
                 print(out)
+    elif parsed["type"] == "discussion_r":
+        out, err, rc = api("GET", f"pulls/comments/{parsed['id']}")
+        if rc != 0:
+            print(f"[FAIL] Could not fetch comment #{parsed['id']}: {err}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            print(json.dumps(json.loads(out), indent=2))
+        except json.JSONDecodeError:
+            print("[FAIL] GitHub returned malformed JSON", file=sys.stderr)
+            sys.exit(1)
     elif parsed["type"] == "pullrequestreview":
         # Fetch a specific review
         out, err, rc = api("GET", f"pulls/{parsed['pr']}/reviews", paginate=True)
@@ -1452,7 +1754,11 @@ def cmd_fetch_url(args):
                 print(out)
     else:
         # Just fetch the PR
-        cmd_fetch_pr(argparse.Namespace(pr_or_url=parsed["pr"]))
+        cmd_fetch_pr(
+            argparse.Namespace(
+                pr_or_url=parsed["pr"], fields=None, format="human"
+            )
+        )
 
 
 def json_to_md(data, depth=0):
@@ -1588,11 +1894,20 @@ def cmd_cmd(args):
     if not out:
         print(err or "(no output)")
         return
+    if args.format == "raw":
+        print(out)
+        return
     # Try JSON parse and format
     try:
         data = json.loads(out)
+        if args.format == "json":
+            print(out)
+            return
         print(json_to_md(data))
     except (json.JSONDecodeError, ValueError):
+        if args.format == "json":
+            print("[FAIL] gh returned malformed JSON", file=sys.stderr)
+            sys.exit(1)
         # Not JSON — print raw
         print(out)
 
@@ -1601,14 +1916,29 @@ def cmd_cmd(args):
 
 def cmd_fetch_issue(args):
     """Fetch and display issue details."""
-    issue_num = args.issue_num
+    issue_num, url_repo = parse_issue_input(args.issue_num)
+    current_repo = get_owner_repo()
+    if url_repo and url_repo.lower() != current_repo.lower():
+        print(
+            f"[FAIL] Refusing issue URL from foreign repository: {url_repo}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    issue_repo = url_repo or current_repo
     fields = args.fields or "number,title,state,author,body,createdAt,updatedAt,closedAt,labels,assignees,milestone,comments,url"
-    out, err, rc = run(["gh", "issue", "view", issue_num, "--json", fields])
+    out, err, rc = run(
+        ["gh", "issue", "view", issue_num, "--json", fields, "--repo", issue_repo]
+    )
     if rc != 0:
         print(f"[FAIL] Could not fetch issue #{issue_num}: {err}", file=sys.stderr)
         sys.exit(1)
     try:
         data = json.loads(out)
+        if not isinstance(data, dict):
+            raise TypeError
+        if args.format in ("json", "raw"):
+            print(out)
+            return
         if args.fields:
             print(json_to_md(data))
             return
@@ -1625,7 +1955,7 @@ def cmd_fetch_issue(args):
             print(f"URL: {data['url']}")
         labels = data.get('labels', [])
         if labels:
-            print(f"Labels: {', '.join(l.get('name', '') for l in labels)}")
+            print(f"Labels: {', '.join(label.get('name', '') for label in labels)}")
         assignees = data.get('assignees', [])
         if assignees:
             print(f"Assignees: {', '.join(a.get('login', '') for a in assignees)}")
@@ -1640,8 +1970,12 @@ def cmd_fetch_issue(args):
             print(body)
         else:
             print("(no body)")
-    except json.JSONDecodeError:
-        print(out)
+    except (json.JSONDecodeError, KeyError, TypeError):
+        print(
+            f"[FAIL] GitHub returned malformed JSON for issue #{issue_num}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def cmd_fetch_issues(args):
@@ -1673,7 +2007,7 @@ def cmd_fetch_issues(args):
             labels_str = ""
             labels = issue.get("labels", [])
             if labels:
-                labels_str = f" [{', '.join(l.get('name', '') for l in labels)}]"
+                labels_str = f" [{', '.join(label.get('name', '') for label in labels)}]"
             print(f"  #{issue['number']} ({state_tag}){labels_str} — {issue['title']}")
             print(f"       by {issue['author']['login']} — Created: {issue['createdAt']}")
     except json.JSONDecodeError:
@@ -1689,31 +2023,382 @@ def cmd_create_issue(args):
         sys.exit(1)
 
     body = open(body_file).read()
+    actor = None if args.unclaimed else authenticated_login()
     data = {"title": title, "body": body}
     if args.label:
-        data["labels"] = [l.strip() for l in args.label.split(",")]
-    if args.assignee:
-        data["assignees"] = [a.strip() for a in args.assignee.split(",")]
+        data["labels"] = [label.strip() for label in args.label.split(",")]
+    requested = [a.strip() for a in args.assignee.split(",")] if args.assignee else []
+    assignees = [*requested, *([actor] if actor else [])]
+    if assignees:
+        data["assignees"] = list(dict.fromkeys(assignees))
 
-    tf = TMP_DIR / f"gh-create-issue-{int(time.time())}.json"
-    with open(tf, "w") as f:
-        json.dump(data, f)
-
-    OWNER_REPO = get_owner_repo()
-    cmd = ["gh", "api", f"repos/{OWNER_REPO}/issues", "--method", "POST", "--input", str(tf)]
-    out, err, rc = run(cmd)
-    clean_temp(tf)
+    with generated_payload("gh-create-issue-", data) as tf:
+        OWNER_REPO = get_owner_repo()
+        cmd = ["gh", "api", f"repos/{OWNER_REPO}/issues", "--method", "POST", "--input", str(tf)]
+        out, err, rc = run(cmd)
     if rc != 0:
         print(f"[FAIL] Issue creation failed: {err}", file=sys.stderr)
         sys.exit(1)
 
-    clean_temp(body_file)
     try:
         issue_data = json.loads(out)
+        number = issue_data["number"]
+        url = issue_data["html_url"]
+        if not isinstance(number, int) or not isinstance(url, str) or not url:
+            raise KeyError("invalid issue response")
+        if args.format == "json":
+            print(json.dumps({"number": number, "url": url}, separators=(",", ":")))
+            return
         print(f"[OK] Issue created: {issue_data.get('html_url', '')}")
         print(f"       #{issue_data.get('number', '')} — {issue_data.get('title', '')}")
+    except (json.JSONDecodeError, KeyError):
+        print("[FAIL] GitHub returned malformed issue creation JSON", file=sys.stderr)
+        sys.exit(1)
+
+
+def _json_response(content, description):
+    """Return a GitHub JSON response or stop before a dependent write."""
+    try:
+        return json.loads(content)
     except json.JSONDecodeError:
-        print(out)
+        print(f"[FAIL] GitHub returned malformed {description} JSON", file=sys.stderr)
+        sys.exit(1)
+
+
+def _specs_result(issue, action):
+    """Return one validated Specs issue result."""
+    try:
+        result = {"action": action, "number": issue["number"], "url": issue["html_url"]}
+        if not isinstance(result["number"], int) or not isinstance(result["url"], str):
+            raise TypeError
+    except (KeyError, TypeError):
+        print("[FAIL] GitHub returned malformed Specs issue JSON", file=sys.stderr)
+        sys.exit(1)
+    return result
+
+
+def _print_specs_result(result, output_format):
+    """Render one validated Specs issue result."""
+    if output_format == "json":
+        print(json.dumps(result, sort_keys=True))
+    else:
+        print(f"[OK] Specs issue {result['action']}: {result['url']}")
+
+
+def _has_primary_issue_marker(body, primary):
+    """Return whether body has exactly one canonical primary issue marker."""
+    markers = (
+        re.findall(r"(?m)^Primary Issue: #([1-9][0-9]*)$", body)
+        if isinstance(body, str)
+        else []
+    )
+    return markers == [str(primary)]
+
+
+def _issue_labels(issue, description):
+    """Return validated labels from one GitHub issue response."""
+    labels = issue.get("labels") if isinstance(issue, dict) else None
+    if not isinstance(labels, list) or any(
+        not isinstance(label, dict) or not isinstance(label.get("name"), str)
+        for label in labels
+    ):
+        print(f"[FAIL] GitHub returned malformed {description} issue JSON", file=sys.stderr)
+        sys.exit(1)
+    return {label["name"] for label in labels}
+
+
+def _validate_primary_specs_issue(primary):
+    """Fetch and validate a primary issue before Specs mutations."""
+    issue, error, code = api("GET", f"issues/{primary}")
+    if code:
+        print(f"[FAIL] Could not fetch primary issue: {error}", file=sys.stderr)
+        sys.exit(1)
+    issue_data = _json_response(issue, "primary issue")
+    if not isinstance(issue_data, dict):
+        print("[FAIL] GitHub returned malformed primary issue JSON", file=sys.stderr)
+        sys.exit(1)
+    if issue_data.get("state") != "open":
+        print("[FAIL] Primary issue must be open", file=sys.stderr)
+        sys.exit(1)
+    if "pull_request" in issue_data:
+        print("[FAIL] Primary issue must not be a pull request", file=sys.stderr)
+        sys.exit(1)
+    labels = _issue_labels(issue_data, "primary")
+    if "roadmap" in labels:
+        print("[FAIL] Primary issue must not be roadmap", file=sys.stderr)
+        sys.exit(1)
+    if "spec" in labels:
+        print("[FAIL] Primary issue must not be spec", file=sys.stderr)
+        sys.exit(1)
+    body = issue_data.get("body")
+    if body is None:
+        body = ""
+    if not isinstance(body, str):
+        print("[FAIL] GitHub returned malformed primary issue JSON", file=sys.stderr)
+        sys.exit(1)
+    return re.findall(r"(?m)^Specs: #([1-9][0-9]*)\s*$", body)
+
+
+def _link_primary_specs_issue(primary, specs_number):
+    """Add the canonical Specs reference to the primary issue once."""
+    issue, error, code = api("GET", f"issues/{primary}")
+    if code:
+        print(f"[FAIL] Could not fetch primary issue: {error}", file=sys.stderr)
+        sys.exit(1)
+    issue_data = _json_response(issue, "primary issue")
+    body = issue_data.get("body") if isinstance(issue_data, dict) else None
+    if body is None:
+        body = ""
+    if not isinstance(body, str):
+        print("[FAIL] GitHub returned malformed primary issue JSON", file=sys.stderr)
+        sys.exit(1)
+    references = re.findall(r"(?m)^Specs: #([1-9][0-9]*)\s*$", body)
+    if references == [str(specs_number)]:
+        return
+    if references:
+        print("[FAIL] Primary issue already links a different or duplicate Specs issue", file=sys.stderr)
+        sys.exit(1)
+    _, error, code = api(
+        "PATCH", f"issues/{primary}", {"body": f"{body.rstrip()}\n\nSpecs: #{specs_number}\n"}
+    )
+    if code:
+        print(f"[FAIL] Could not link primary issue to Specs issue: {error}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_specs_ensure(args):
+    """Create or reuse the single open Specs issue for one implementation issue."""
+    primary, url_repo = parse_issue_input(args.primary)
+    if url_repo and url_repo.lower() != get_owner_repo().lower():
+        print(
+            f"[FAIL] Refusing issue URL from foreign repository: {url_repo}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if int(primary) < 1 or not args.title.strip():
+        print("[FAIL] Specs issue inputs must be valid", file=sys.stderr)
+        sys.exit(1)
+    primary_references = _validate_primary_specs_issue(primary)
+    title = f"Spec: {args.title.strip()}"
+    labels, error, code = api("GET", "labels?per_page=100", paginate=True)
+    if code:
+        print(f"[FAIL] Could not inspect repository labels: {error}", file=sys.stderr)
+        sys.exit(1)
+    label_data = _json_response(labels, "label")
+    if not isinstance(label_data, list):
+        print("[FAIL] GitHub returned malformed label JSON", file=sys.stderr)
+        sys.exit(1)
+    has_spec = any(
+        label.get("name") == "spec" for label in label_data if isinstance(label, dict)
+    )
+    issues, error, code = api(
+        "GET", "issues?state=open&labels=spec&per_page=100", paginate=True
+    )
+    if code:
+        print(f"[FAIL] Could not inspect Specs issues: {error}", file=sys.stderr)
+        sys.exit(1)
+    issue_data = _json_response(issues, "Specs issue")
+    if not isinstance(issue_data, list):
+        print("[FAIL] GitHub returned malformed Specs issue JSON", file=sys.stderr)
+        sys.exit(1)
+    candidates = [
+        issue
+        for issue in issue_data
+        if isinstance(issue, dict)
+        and "pull_request" not in issue
+        and issue.get("title") == title
+    ]
+    if any(
+        isinstance(issue.get("body"), str)
+        and len(re.findall(r"(?m)^Primary Issue: #[1-9][0-9]*$", issue["body"])) > 1
+        for issue in candidates
+    ):
+        print("[FAIL] Specs issue has ambiguous primary issue markers", file=sys.stderr)
+        sys.exit(1)
+    matches = [
+        issue
+        for issue in candidates
+        if _has_primary_issue_marker(issue.get("body"), primary)
+    ]
+    if len(matches) > 1:
+        print("[FAIL] Found multiple matching open Specs issues", file=sys.stderr)
+        sys.exit(1)
+    if matches:
+        result = _specs_result(matches[0], "reused")
+        _link_primary_specs_issue(primary, result["number"])
+        _print_specs_result(result, args.format)
+        return
+    if primary_references:
+        print(
+            "[FAIL] Primary issue already links a different or duplicate Specs issue",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not has_spec:
+        _, error, code = api(
+            "POST",
+            "labels",
+            {"name": "spec", "color": "0E8A16", "description": "Planning record"},
+        )
+        if code:
+            print(f"[FAIL] Could not create spec label: {error}", file=sys.stderr)
+            sys.exit(1)
+    body = (
+        f"# Specs: {args.title.strip()}\n\nPrimary Issue: #{primary}\n\n"
+        "**Current Revision**: none\n\n## Revision History\n"
+    )
+    created, error, code = api(
+        "POST", "issues", {"title": title, "body": body, "labels": ["spec"]}
+    )
+    if code:
+        print(f"[FAIL] Could not create Specs issue: {error}", file=sys.stderr)
+        sys.exit(1)
+    result = _specs_result(_json_response(created, "Specs issue"), "created")
+    _link_primary_specs_issue(primary, result["number"])
+    _print_specs_result(result, args.format)
+
+
+def _specs_document(path, name, revision):
+    """Read one complete revision document after repository-bound validation."""
+    if not check_file(path):
+        sys.exit(1)
+    try:
+        content = Path(path).read_text(encoding="utf-8")
+    except OSError as error:
+        print(f"[FAIL] Could not read {name} document: {error}", file=sys.stderr)
+        sys.exit(1)
+    return f"## Revision {revision}: {name.title()}\n\n{content}"
+
+
+def _specs_index(body, revision, documents):
+    """Advance the mutable index while retaining every prior revision entry."""
+    if "## Revision History" not in body:
+        print("[FAIL] Specs issue has no canonical revision index", file=sys.stderr)
+        sys.exit(1)
+    if not re.search(r"(?m)^\*\*Current Revision\*\*:.*$", body):
+        print("[FAIL] Specs issue has no current-revision marker", file=sys.stderr)
+        sys.exit(1)
+    labels = {
+        "spec": "Spec",
+        "design": "Design",
+        "plan": "Implementation Plan",
+        "task": "Tasks",
+    }
+    current_links = "\n".join(
+        f"- **{labels[name]}**: [{labels[name]}]({url})"
+        for name, url in documents.items()
+    )
+    current = re.sub(
+        r"(?m)^\*\*Current Revision\*\*:.*$(?:\n- \*\*(?:Spec|Design|"
+        r"Implementation Plan|Tasks)\*\*:.*$)*",
+        f"**Current Revision**: {revision}\n{current_links}",
+        body,
+        count=1,
+    )
+    links = ", ".join(f"[{name}]({url})" for name, url in documents.items())
+    return f"{current.rstrip()}\n\n- Revision {revision}: {links}\n"
+
+
+def _specs_current_revision(body):
+    """Return the current revision or stop on a malformed index marker."""
+    markers = re.findall(
+        r"(?m)^\*\*Current Revision\*\*: (none|[1-9][0-9]*)\s*$", body
+    )
+    if not markers:
+        print("[FAIL] Specs issue has no valid current-revision marker", file=sys.stderr)
+        sys.exit(1)
+    if len(markers) > 1:
+        print(
+            "[FAIL] Specs issue must have exactly one valid current-revision marker",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return 0 if markers[0] == "none" else int(markers[0])
+
+
+def _specs_comment_url(comment, number):
+    """Return one validated Specs comment URL."""
+    url = comment.get("html_url") if isinstance(comment, dict) else None
+    if not isinstance(url, str) or not re.fullmatch(
+        rf"https://github\.com/[^/]+/[^/]+/issues/{number}#issuecomment-[1-9][0-9]*",
+        url,
+        re.I,
+    ):
+        print("[FAIL] GitHub returned malformed Specs comment URL", file=sys.stderr)
+        sys.exit(1)
+    return url
+
+
+def cmd_specs_publish(args):
+    """Append one complete document revision and advance its Specs issue index."""
+    if args.number < 1 or args.primary < 1 or args.revision < 1:
+        print("[FAIL] Specs issue inputs must be positive", file=sys.stderr)
+        sys.exit(1)
+    issue, error, code = api("GET", f"issues/{args.number}")
+    if code:
+        print(f"[FAIL] Could not fetch Specs issue: {error}", file=sys.stderr)
+        sys.exit(1)
+    issue_data = _json_response(issue, "Specs issue")
+    if not isinstance(issue_data, dict) or issue_data.get("state") != "open":
+        print("[FAIL] Specs issue must be open", file=sys.stderr)
+        sys.exit(1)
+    if "pull_request" in issue_data:
+        print("[FAIL] Specs issue must not be a pull request", file=sys.stderr)
+        sys.exit(1)
+    if "spec" not in _issue_labels(issue_data, "Specs"):
+        print("[FAIL] Specs issue must be labelled spec", file=sys.stderr)
+        sys.exit(1)
+    body = issue_data.get("body")
+    if not _has_primary_issue_marker(body, args.primary):
+        print("[FAIL] Specs issue does not identify the primary issue", file=sys.stderr)
+        sys.exit(1)
+    current_revision = _specs_current_revision(body)
+    if args.revision != current_revision + 1:
+        print("[FAIL] Specs revision must be the next consecutive revision", file=sys.stderr)
+        sys.exit(1)
+    documents = {
+        name: _specs_document(getattr(args, name), name, args.revision)
+        for name in ("spec", "design", "plan", "task")
+    }
+    comments, error, code = api("GET", f"issues/{args.number}/comments?per_page=100", paginate=True)
+    if code:
+        print(f"[FAIL] Could not inspect Specs comments: {error}", file=sys.stderr)
+        sys.exit(1)
+    comment_data = _json_response(comments, "Specs comment")
+    if not isinstance(comment_data, list):
+        print("[FAIL] GitHub returned malformed Specs comment JSON", file=sys.stderr)
+        sys.exit(1)
+    references = {}
+    for name, content in documents.items():
+        heading = f"## Revision {args.revision}: {name.title()}\n\n"
+        matching = [
+            comment
+            for comment in comment_data
+            if isinstance(comment, dict)
+            and isinstance(comment.get("body"), str)
+            and comment["body"].startswith(heading)
+        ]
+        if len(matching) > 1 or (matching and matching[0]["body"] != content):
+            print("[FAIL] Specs revision has conflicting document comments", file=sys.stderr)
+            sys.exit(1)
+        if matching:
+            references[name] = _specs_comment_url(matching[0], args.number)
+    for name, content in documents.items():
+        if name in references:
+            continue
+        comment, error, code = api("POST", f"issues/{args.number}/comments", {"body": content})
+        if code:
+            print(f"[FAIL] Could not publish {name} revision: {error}", file=sys.stderr)
+            sys.exit(1)
+        references[name] = _specs_comment_url(
+            _json_response(comment, "Specs comment"), args.number
+        )
+    _, error, code = api("PATCH", f"issues/{args.number}", {"body": _specs_index(body, args.revision, references)})
+    if code:
+        print(f"[FAIL] Could not update Specs index: {error}", file=sys.stderr)
+        sys.exit(1)
+    result = {"number": args.number, "revision": args.revision, "documents": references}
+    print(json.dumps(result, sort_keys=True) if args.format == "json" else f"[OK] Published Specs revision {args.revision}")
 
 
 def cmd_update_issue_body(args):
@@ -1729,7 +2414,6 @@ def cmd_update_issue_body(args):
         print(f"[FAIL] Issue body update failed: {err}", file=sys.stderr)
         sys.exit(1)
 
-    clean_temp(body_file)
     print(f"[OK] Issue #{issue_num} body updated")
 
 
@@ -1757,14 +2441,21 @@ def main():
     fp.add_argument("pr_or_url", help="PR number or URL")
     fp.add_argument("--json", dest="fields", type=str, default=None,
                     help="Custom JSON fields (default: curated useful fields)")
+    fp.add_argument("--format", choices=["human", "json", "raw"], default="human")
     fp.set_defaults(func=cmd_fetch_pr)
     
     fc = fetch_sub.add_parser("comments", help="Fetch PR comments and reviews")
     fc.add_argument("pr_or_url", help="PR number or URL")
-    fc.add_argument("--output", type=str, default=None, help="Write formatted report to this file (default: reviews/remote/REVIEW_<branch>_fetched_<ts>.md)")
+    fc.add_argument("--output", type=str, default=None, help="Write formatted report to this file (default: reviews/remote/REVIEW_<normalized_branch>_fetched_<ts>.md; branch slashes become underscores)")
     fc.add_argument("--all", action="store_true", help="Include minimized/resolved comments (default: skip them)")
     fc.add_argument("--urls-only", action="store_true", help="Output JSON lines of filtered comment URLs only (for preflight consumption)")
     fc.set_defaults(func=cmd_fetch_comments)
+
+    frs = fetch_sub.add_parser(
+        "review-state", help="Fetch authoritative review cleanup state as JSON"
+    )
+    frs.add_argument("pr_or_url", help="PR number or URL")
+    frs.set_defaults(func=cmd_fetch_review_state)
     
     fu = fetch_sub.add_parser("url", help="Fetch a specific comment/review from its full URL")
     fu.add_argument("url", help="Full GitHub URL (e.g., https://github.com/.../pull/11#issue-4399302650)")
@@ -1784,6 +2475,7 @@ def main():
     fi.add_argument("issue_num", help="Issue number")
     fi.add_argument("--json", dest="fields", type=str, default=None,
                     help="Custom JSON fields (default: curated useful fields)")
+    fi.add_argument("--format", choices=["human", "json", "raw"], default="human")
     fi.set_defaults(func=cmd_fetch_issue)
 
     fis = fetch_sub.add_parser("issues", help="List issues with optional filters")
@@ -1906,6 +2598,7 @@ def main():
 
     # cmd — wildcard raw gh runner
     p = sub.add_parser("cmd", help="Run any gh command with auto-formatted JSON output")
+    p.add_argument("--format", choices=["human", "json", "raw"], default="human")
     p.add_argument("gh_args", nargs=argparse.REMAINDER, help="Raw gh arguments (e.g., pr view 10)")
     p.set_defaults(func=cmd_cmd)
 
@@ -1916,6 +2609,7 @@ def main():
     p.add_argument("--head", type=str, default=None, help="Head branch (defaults to current branch)")
     p.add_argument("--base", type=str, default=None, help="Base branch (auto-detected if not specified)")
     p.add_argument("--draft", action="store_true", help="Create as draft")
+    p.add_argument("--format", choices=["human", "json"], default="human")
     p.set_defaults(func=cmd_create_pr)
 
     # create issue
@@ -1923,20 +2617,46 @@ def main():
     p.add_argument("title", help="Issue title")
     p.add_argument("body_file", help="Path to markdown file with issue body")
     p.add_argument("--label", type=str, default=None, help="Comma-separated labels to apply")
-    p.add_argument("--assignee", type=str, default=None, help="Comma-separated assignees")
+    assignment = p.add_mutually_exclusive_group()
+    assignment.add_argument("--assignee", type=str, default=None, help="Comma-separated assignees")
+    assignment.add_argument("--unclaimed", action="store_true", help="Create without assignees")
+    p.add_argument("--format", choices=["human", "json"], default="human")
     p.set_defaults(func=cmd_create_issue)
+
+    p = sub.add_parser("specs", help="Create or reuse the Specs issue for a primary issue")
+    specs_sub = p.add_subparsers(dest="specs_action", required=True)
+    ensure = specs_sub.add_parser("ensure", help="Create or reuse one open Specs issue")
+    ensure.add_argument("primary", help="Primary issue number or URL")
+    ensure.add_argument("title", help="Primary issue title")
+    ensure.add_argument("--format", choices=["human", "json"], default="human")
+    ensure.set_defaults(func=cmd_specs_ensure)
+    publish = specs_sub.add_parser("publish", help="Append one complete Specs revision")
+    publish.add_argument("number", type=int, help="Specs issue number")
+    publish.add_argument("--primary", type=int, required=True, help="Primary issue number")
+    publish.add_argument("--revision", type=int, required=True)
+    for name in ("spec", "design", "plan", "task"):
+        publish.add_argument(f"--{name}", required=True)
+    publish.add_argument("--format", choices=["human", "json"], default="human")
+    publish.set_defaults(func=cmd_specs_publish)
+
+    # claim issue or PR
+    p = sub.add_parser("claim", help="Assign the authenticated user to an issue or PR")
+    p.add_argument("number", type=int, help="Issue or PR number")
+    p.add_argument("--format", choices=["human", "json"], default="human")
+    p.set_defaults(func=cmd_claim)
 
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
         parser.print_help()
         sys.exit(0)
 
     # If the first arg after script isn't a known command, show fallback message
-    known = {"fetch", "post", "resolve", "minimize", "unminimize", "batch", "interact", "update", "create", "create-issue", "cmd", "fields"}
+    known = {"fetch", "post", "resolve", "minimize", "unminimize", "batch", "interact", "update", "create", "create-issue", "specs", "claim", "cmd", "fields"}
     if sys.argv[1] not in known:
-        print(f"[INFO] 'gh.py {sys.argv[1]}' is not available yet. Use raw `gh` CLI directly:")
-        print(f"       gh {' '.join(sys.argv[1:])}")
-        print(f"[INFO] Run `uv run python .agents/scripts/gh.py --help` to see available commands.")
-        sys.exit(0)
+        print(
+            f"[FAIL] Unknown command. Use: gh.py cmd {' '.join(sys.argv[1:])}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     args = parser.parse_args()
     args.func(args)

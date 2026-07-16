@@ -1,36 +1,28 @@
 ---
-description: Python coding standards, Ruff configuration, absolute imports, naming conventions
-globs: "*.py"
+description: Python coding, naming, logging, and complexity standards
+globs: "*.py, pyproject.toml"
 alwaysApply: false
 ---
 
-# Code Standards
+# Python Code Standards
 
-## Ruff
-- Line length: 88
-- Rule set: E, F, I, N, W, D (Google-style docstrings), UP, B, SIM, ARG, LOG, PT, S, PTH, RUF
-- Auto-fix on save: `ruff check --fix --select ALL`
+## Tooling
 
-## Imports
-- Use absolute imports: `from my_package.module import Name`
-- Group: stdlib → third-party → local (one line per import, no `*`)
+- Ruff line length: 88.
+- Ruff rule families: E, F, I, N, W, D with Google-style docstrings, UP, B, SIM, ARG, LOG, PT, S, PTH, and RUF.
+- Maximum cyclomatic complexity per function: 10, measured by Ruff C901 or radon.
+- Run formatting and safe fixes through the subproject's configured Ruff commands; inspect changes before accepting them.
 
-## Naming
-- Classes: `PascalCase`
-- Functions/variables: `snake_case`
-- Constants: `UPPER_SNAKE_CASE`
-- Private: `_leading_underscore`
-- Modules: `short_snake_case`
-- Tests: `test_<function>_<scenario>` or `test_gs_<goalspec>_<name>`
+## Imports And Naming
 
-## Docstrings
-- Google-style: `"""Brief description.\n\nArgs:\n    arg: Description.\n\nReturns:\n    Description.\n"""`
+- Use absolute imports, ordered stdlib, third-party, then local. Never use wildcard imports.
+- Classes use `PascalCase`; functions and variables use `snake_case`; constants use `UPPER_SNAKE_CASE`; private names use a leading underscore.
+- Modules use short `snake_case` names.
+- Public modules, classes, and functions use concise Google-style docstrings.
 
-## Complexity
-- Max cyclomatic complexity per function: 10 (measured via radon)
-- Flag cognitive complexity in review
+## Python Practices
 
-## Logging
-- Use centralized logger: `from my_package.utils.logging import get_logger`
-- Log levels: DEBUG (details), INFO (milestones), WARNING (unexpected), ERROR (failures)
-- Structured format: `key=value` pairs
+- Use the standard `logging` module unless the subproject already defines a logger utility. Do not invent a project-wide package path.
+- Use `DEBUG` for diagnostics, `INFO` for milestones, `WARNING` for recoverable unexpected states, and `ERROR` for failures.
+- Prefer structured `key=value` context and never log secrets or sensitive personal data.
+- Avoid mutable default arguments, bare `except`, and `print()` outside CLI output or tests.

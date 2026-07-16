@@ -1,7 +1,7 @@
 """Review log management script.
 
 Creates, validates, and browses review log entries stored in
-./reviews/log/REVIEW_{branch}.md format.
+./reviews/log/REVIEW_{normalized_branch}.md format.
 
 Usage:
     uv run python .agents/scripts/review-log.py --log-create <review-path>
@@ -11,33 +11,46 @@ Usage:
 <EOF_DESC>
 """
 
-import subprocess, sys, re, argparse, datetime
+import argparse
+import datetime
+import os
+import re
+import sys
+import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import repo_guard
+import review_common
+from cli_common import EXIT_EXTERNAL, ExternalCommandError, run_process
 
-def run(cmd):
-    try:
-        return subprocess.check_output(cmd, text=True).strip()
-    except Exception:
-        return ""
+
+FINDING_ID = r"[A-Z][A-Z0-9]*-[A-Z][A-Z0-9]*-\d{3}"
+STATUSES = {"OPEN", "ADDRESSED", "INVALID", "DEFERRED"}
+SEVERITIES = {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
 
 
 def get_branch() -> str:
-    branch = run(["git", "branch", "--show-current"])
-    return branch.replace("/", "-") if branch else "unknown"
+    command = ["git", "branch", "--show-current"]
+    branch = run_process(command)
+    if not branch:
+        raise ExternalCommandError(command, "Detached HEAD; cannot determine branch")
+    return branch.replace("/", "_")
 
 
 def get_log_path(branch: str | None = None) -> Path:
     if not branch:
         branch = get_branch()
-    return Path("./reviews/log") / f"REVIEW_{branch}.md"
+    branch = branch.replace("/", "_")
+    return repo_guard.assert_inside_repo(Path("./reviews/log") / f"REVIEW_{branch}.md")
 
 
 def get_next_entry_id(log_path: Path) -> int:
+    log_path = repo_guard.assert_inside_repo(log_path)
     if not log_path.exists():
         return 1
     content = log_path.read_text()
-    pattern = r'\[REVIEW_(\d+)_START\]'
+    pattern = r"\[REVIEW_(\d+)_START\]"
     matches = re.findall(pattern, content)
     if not matches:
         return 1
@@ -45,115 +58,87 @@ def get_next_entry_id(log_path: Path) -> int:
 
 
 def parse_review_findings(review_path: str) -> list[dict]:
-    """Parse findings from a review report.
-
-    Returns findings with status addressed, invalid, or deferred (skips OPEN).
-    """
-    content = Path(review_path).read_text()
-    findings = []
-
-    finding_blocks = re.split(r'^###\s+', content, flags=re.MULTILINE)
-    for block in finding_blocks[1:]:  # Skip text before first ###
-        finding = {"id": "", "title": "", "severity": "", "category": "",
-                    "status": "", "problem": "", "validation": "",
-                    "resolution": "", "reasoning": ""}
-
-        # Flexible ID matching — supports ISSUE-001, F-001, BUG-42, or any word-number pattern
-        id_match = re.match(r'([A-Za-z]+-\d+)', block)
-        if id_match:
-            finding["id"] = id_match.group(1)
-
-        # Flexible title extraction: use the entire first line, stripping ID prefix and severity
-        first_line = block.split('\n')[0].strip()
-        # Try to extract a meaningful title by stripping {ID} or {ID - SEVERITY - } prefix
-        title = first_line
-        # Strip the ID prefix (e.g. "ISSUE-001", "F-001")
-        title = re.sub(r'^[A-Za-z]+-\d+\s*[-:]\s*', '', title)
-        # Strip severity prefix (e.g. "CRITICAL - ", "MEDIUM - ")
-        title = re.sub(r'^[A-Z]+\s*-\s*', '', title)
-        if title:
-            finding["title"] = title
-        elif id_match:
-            finding["title"] = id_match.group(1)
-
-        status_match = re.search(r'\*\*Status\*\*:\s*(\w+)', block)
-        if status_match:
-            status = status_match.group(1).upper()
-            if status in ("ADDRESSED", "INVALID", "DEFERRED"):
-                finding["status"] = status.lower()
-            else:
-                continue  # Skip OPEN findings
-
-        sev_match = re.search(r'\*\*Severity\*\*:\s*(\w+)', block)
-        if sev_match:
-            finding["severity"] = sev_match.group(1).lower()
-
-        cat_match = re.search(r'\*\*Category\*\*:\s*(\w+)', block)
-        if cat_match:
-            finding["category"] = cat_match.group(1).lower()
-
-        # Use --- or end of block as section boundary (not \n\n which breaks on code blocks)
-        section_end = r'(?:\n---|\Z)'
-
-        # Problem is the paragraph after Status/Severity, before Location or Why It Matters
-        problem_match = re.search(r'\*\*Severity\*\*:\s*\w+\s*\n\n(.*?)(?=\n\*\*(?:Location|Why It Matters|Suggested Fix))', block, re.DOTALL)
-        if problem_match:
-            finding["problem"] = problem_match.group(1).strip()
-        else:
-            # Fallback: between Location and Suggested Fix
-            problem_match = re.search(r'\*\*Location\*\*:\s*(.*?)' + section_end, block, re.DOTALL)
-            if problem_match:
-                finding["problem"] = problem_match.group(1).strip()
-
-        # Resolution = Suggested Fix content (before How to Validate or ---)
-        res_match = re.search(r'\*\*Suggested Fix\*\*:\s*(.*?)(?=\n\*\*How to Validate|\n---|\Z)', block, re.DOTALL)
-        if res_match:
-            finding["resolution"] = res_match.group(1).strip()
-
-        # Validation method
-        val_match = re.search(r'\*\*How to Validate\*\*:\s*(.*?)' + section_end, block, re.DOTALL)
-        if val_match:
-            finding["validation"] = val_match.group(1).strip()
-
-        findings.append(finding)
-
-    return findings
+    """Parse a canonical findings section, rejecting malformed reports."""
+    content = repo_guard.assert_inside_repo(review_path).read_text()
+    return review_common.parse_findings(content)
 
 
 def format_finding(f: dict) -> str:
-    lines = [
-        f"### {f['id']}: {f['title']}",
-        f"- **Severity**: {f['severity']} | **Category**: {f['category']}",
-        f"- **Status**: {f['status']}",
-    ]
-    if f["problem"]:
-        lines.append(f"- **Problem**: {f['problem']}")
-    if f["validation"]:
-        lines.append(f"- **Validation**: {f['validation']}")
-    if f["resolution"]:
-        lines.append(f"- **Resolution**: {f['resolution']}")
-    if f["reasoning"]:
-        lines.append(f"- **Reasoning**: {f['reasoning']}")
-    return "\n".join(lines) + "\n"
+    return (
+        f"### [{f['id']}] - [{f['severity'].upper()}] - {f['title']}\n\n"
+        f"**Status**: {f['status'].upper()}\n\n"
+        f"**Severity**: {f['severity'].upper()}\n\n"
+        f"**Category**: {f['category'].upper()}\n\n"
+        f"**Location**: {f['location']}\n\n"
+        f"**Description**:\n{f['problem']}\n\n"
+        f"**Why It Matters**:\n{f['impact']}\n\n"
+        f"**Suggested Fix**:\n{f['resolution']}\n\n"
+        f"**How to Validate**:\n```bash\n{f['validation']}\n```\n\n"
+        f"**Expected Addressed Result**:\n{f['expected_result']}\n"
+    )
+
+
+def write_atomic(path: Path, content: str) -> None:
+    """Replace a repository file atomically using its own directory."""
+    path = repo_guard.assert_inside_repo(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", dir=path.parent, delete=False, encoding="utf-8"
+        ) as temp_file:
+            temp_file.write(content)
+            temp_path = repo_guard.assert_inside_repo(temp_file.name)
+        os.replace(temp_path, path)
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink()
 
 
 def cmd_log_create(review_path: str) -> int:
-    if not Path(review_path).exists():
+    try:
+        review_file = repo_guard.assert_inside_repo(review_path)
+    except ValueError as error:
+        print(f"[ERROR] {error}", file=sys.stderr)
+        return 1
+
+    if not review_file.exists():
         print(f"[ERROR] Review file not found: {review_path}", file=sys.stderr)
         return 1
 
-    findings = parse_review_findings(review_path)
+    try:
+        report = review_common.read_report(review_file)
+        findings = report["findings"]
+    except ValueError as error:
+        print(f"[ERROR] {error}", file=sys.stderr)
+        return 1
+    invalid_findings = [
+        finding
+        for finding in findings
+        if finding["status"] not in ("addressed", "invalid", "deferred")
+    ]
+    if invalid_findings:
+        invalid_ids = ", ".join(finding["id"] for finding in invalid_findings)
+        print(
+            f"[ERROR] Review has OPEN, malformed, or missing statuses: {invalid_ids}",
+            file=sys.stderr,
+        )
+        return 1
+
+    branch = report["branch"].replace("/", "_")
+    cycle_key = f"{branch}:{report['head']}"
+    log_path = get_log_path(branch)
+    if log_path.exists() and f"**Cycle Key**: {cycle_key}" in log_path.read_text():
+        print(f"[OK] Review already logged: {log_path} ({cycle_key})")
+        return 0
+
     if not findings:
         # Approved review with 0 findings — log an approval entry
-        branch = get_branch()
-        log_dir = Path("./reviews/log")
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_path = get_log_path(branch)
         entry_id = get_next_entry_id(log_path)
         date_str = datetime.datetime.now().strftime("%Y-%m-%d")
 
-        review_content = Path(review_path).read_text()
-        scope_match = re.search(r'\*\*Scope\*\*:\s*(.+)', review_content)
+        review_content = review_file.read_text()
+        scope_match = re.search(r"\*\*Scope\*\*:\s*(.+)", review_content)
         scope = scope_match.group(1).strip() if scope_match else ""
 
         entry = (
@@ -163,6 +148,7 @@ def cmd_log_create(review_path: str) -> int:
             f"**Review Date**: {date_str}\n"
             f"**Scope**: {scope}\n"
             f"**Cycle**: {entry_id}\n"
+            f"**Cycle Key**: {cycle_key}\n"
             f"**Total Findings**: 0 | **Resolved**: 0 | **Deferred**: 0 | **Invalid**: 0\n"
             f"\n"
             f"### Approval — 0 findings, clean review\n"
@@ -175,26 +161,21 @@ def cmd_log_create(review_path: str) -> int:
 
         if log_path.exists():
             existing = log_path.read_text().rstrip()
-            log_path.write_text(existing + "\n" + entry)
+            write_atomic(log_path, existing + "\n" + entry)
         else:
             header = f"# Review Log: {branch}\n\n"
-            log_path.write_text(header + entry)
+            write_atomic(log_path, header + entry)
 
         print(f"[OK] Approved review logged: {log_path} (entry REVIEW_{entry_id})")
         return 0
-
-    branch = get_branch()
-    log_dir = Path("./reviews/log")
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = get_log_path(branch)
 
     entry_id = get_next_entry_id(log_path)
     date_str = datetime.datetime.now().strftime("%Y-%m-%d")
 
     # Get scope from review file header
     scope = ""
-    review_content = Path(review_path).read_text()
-    scope_match = re.search(r'\*\*Scope\*\*:\s*(.+)', review_content)
+    review_content = review_file.read_text()
+    scope_match = re.search(r"\*\*Scope\*\*:\s*(.+)", review_content)
     if scope_match:
         scope = scope_match.group(1).strip()
 
@@ -214,6 +195,7 @@ def cmd_log_create(review_path: str) -> int:
         f"**Review Date**: {date_str}\n"
         f"**Scope**: {scope}\n"
         f"**Cycle**: {entry_id}\n"
+        f"**Cycle Key**: {cycle_key}\n"
         f"**Total Findings**: {total} | **Resolved**: {resolved} | **Deferred**: {deferred} | **Invalid**: {invalid}\n"
         f"\n"
         f"---\n\n"
@@ -227,19 +209,23 @@ def cmd_log_create(review_path: str) -> int:
         existing = log_path.read_text().rstrip()
         # Insert before trailing newline or append
         if existing.endswith("---"):
-            log_path.write_text(existing + "\n" + entry)
+            write_atomic(log_path, existing + "\n" + entry)
         else:
-            log_path.write_text(existing + "\n" + entry)
+            write_atomic(log_path, existing + "\n" + entry)
     else:
         header = f"# Review Log: {branch}\n\n"
-        log_path.write_text(header + entry)
+        write_atomic(log_path, header + entry)
 
     print(f"[OK] Review logged: {log_path} (entry REVIEW_{entry_id})")
     return 0
 
 
 def cmd_validate(log_path: str) -> int:
-    p = Path(log_path)
+    try:
+        p = repo_guard.assert_inside_repo(log_path)
+    except ValueError as error:
+        print(f"[ERROR] {error}", file=sys.stderr)
+        return 1
     if not p.exists():
         print(f"[ERROR] Log file not found: {log_path}", file=sys.stderr)
         return 1
@@ -252,8 +238,8 @@ def cmd_validate(log_path: str) -> int:
         errors.append("Missing '# Review Log:' header")
 
     # Check entry delimiters
-    starts = re.findall(r'\[REVIEW_(\d+)_START\]', content)
-    ends = re.findall(r'\[REVIEW_(\d+)_END\]', content)
+    starts = re.findall(r"\[REVIEW_(\d+)_START\]", content)
+    ends = re.findall(r"\[REVIEW_(\d+)_END\]", content)
 
     if not starts:
         errors.append("No review entries found")
@@ -264,7 +250,9 @@ def cmd_validate(log_path: str) -> int:
     # Check sequential ID ordering
     for i in range(len(starts) - 1):
         if int(starts[i]) >= int(starts[i + 1]):
-            errors.append(f"Entry IDs not sequential: REVIEW_{starts[i]} followed by REVIEW_{starts[i+1]}")
+            errors.append(
+                f"Entry IDs not sequential: REVIEW_{starts[i]} followed by REVIEW_{starts[i + 1]}"
+            )
 
     # Validate each entry
     for sid, eid in zip(starts, ends):
@@ -282,21 +270,34 @@ def cmd_validate(log_path: str) -> int:
 
 
 def cmd_next_id(log_path: str) -> int:
-    next_id = get_next_entry_id(Path(log_path) if log_path else get_log_path())
+    try:
+        path = repo_guard.assert_inside_repo(log_path) if log_path else get_log_path()
+        next_id = get_next_entry_id(path)
+    except ValueError as error:
+        print(f"[ERROR] {error}", file=sys.stderr)
+        return 1
+    except ExternalCommandError as error:
+        print(f"[ERROR] {error}", file=sys.stderr)
+        return EXIT_EXTERNAL
     print(next_id)
     return 0
 
 
 def cmd_browse(log_path: str, page: int = 1, per_page: int = 1) -> int:
-    p = Path(log_path)
+    try:
+        p = repo_guard.assert_inside_repo(log_path)
+    except ValueError as error:
+        print(f"[ERROR] {error}", file=sys.stderr)
+        return 1
     if not p.exists():
         print(f"[ERROR] Log file not found: {log_path}", file=sys.stderr)
         return 1
 
     content = p.read_text()
     entries = re.findall(
-        r'\[REVIEW_(\d+)_START\]\n---\n(.*?)\n---\n\[REVIEW_\1_END\]',
-        content, re.DOTALL
+        r"\[REVIEW_(\d+)_START\]\n---\n(.*?)\n---\n\[REVIEW_\1_END\]",
+        content,
+        re.DOTALL,
     )
 
     if not entries:
@@ -313,13 +314,13 @@ def cmd_browse(log_path: str, page: int = 1, per_page: int = 1) -> int:
 
     for i in range(start, min(end, total)):
         eid, body = entries[i]
-        print(f"{'='*60}")
-        print(f"  Entry REVIEW_{eid} ({i+1}/{total})")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
+        print(f"  Entry REVIEW_{eid} ({i + 1}/{total})")
+        print(f"{'=' * 60}")
         print(f"\n{body.strip()}\n")
 
     if end < total:
-        print(f"--- Page {page} — use --page {page+1} for next ---")
+        print(f"--- Page {page} — use --page {page + 1} for next ---")
     else:
         print("--- End of log ---")
 
@@ -328,16 +329,26 @@ def cmd_browse(log_path: str, page: int = 1, per_page: int = 1) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description="Review log management")
-    parser.add_argument("--log-create", type=str, default=None,
-                        help="Path to review report to log")
-    parser.add_argument("--validate", type=str, default=None,
-                        help="Validate a review log file")
-    parser.add_argument("--next-id", type=str, default=None, const="",
-                        nargs="?", help="Get next entry ID for a log (omit path for default)")
-    parser.add_argument("--browse", type=str, default=None,
-                        help="Browse a review log file")
-    parser.add_argument("--page", type=int, default=1,
-                        help="Page number for browse (default: 1)")
+    parser.add_argument(
+        "--log-create", type=str, default=None, help="Path to review report to log"
+    )
+    parser.add_argument(
+        "--validate", type=str, default=None, help="Validate a review log file"
+    )
+    parser.add_argument(
+        "--next-id",
+        type=str,
+        default=None,
+        const="",
+        nargs="?",
+        help="Get next entry ID for a log (omit path for default)",
+    )
+    parser.add_argument(
+        "--browse", type=str, default=None, help="Browse a review log file"
+    )
+    parser.add_argument(
+        "--page", type=int, default=1, help="Page number for browse (default: 1)"
+    )
     args = parser.parse_args()
 
     if args.log_create:

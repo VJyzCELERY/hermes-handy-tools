@@ -16,7 +16,7 @@ test:
 
 # Run tests with coverage
 coverage:
-	uv run pytest --cov=<source_dir> --cov-report=html
+	uv run pytest --cov=sub_project --cov-report=html
 
 # Run cognitive complexity analysis (radon)
 complexity:

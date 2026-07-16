@@ -1,7 +1,4 @@
-"""Repo-boundary and temp-path enforcement helpers for agent scripts.
-
-Provides shared path-guard functions so scripts never read, write,
-delete, or create paths outside the project root.
+"""Repo-boundary and scoped external-path enforcement helpers for agent scripts.
 
 Usage:
     from . import repo_guard
@@ -9,20 +6,33 @@ Usage:
     tmp = repo_guard.tmp_path("my-file")
 """
 
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
+import argparse
 from pathlib import Path
 from typing import Union
 
 
 def _discover_root() -> Path:
-    """Walk up from this file's location to find the repo root (has .git or AGENTS.md)."""
-    here = Path(__file__).resolve().parent  # .agents/scripts/
-    for candidate in [here, here.parent, here.parent.parent, here.parent.parent.parent]:
-        if (candidate / ".git").exists() or (candidate / "AGENTS.md").exists():
-            return candidate
-    return here.parent.parent  # fallback: two levels up from scripts/
+    """Return the verified root containing this ``.agents/scripts`` directory."""
+    candidate = Path(__file__).resolve().parents[2]
+    if not (candidate / ".git").exists() or not (candidate / "AGENTS.md").is_file():
+        raise RuntimeError(f"Could not verify repository root at '{candidate}'.")
+    return candidate
 
 
 _ROOT = None
+_BYPASS_ROOTS: ContextVar[tuple[Path, ...]] = ContextVar("bypass_roots", default=())
+
+
+class _AppendBypassRoot(argparse.Action):
+    """Append a bypass root without replacing a parent parser's values."""
+
+    def __call__(self, parser, namespace, values, option_string=None) -> None:
+        roots = list(getattr(namespace, self.dest, []))
+        roots.append(values)
+        setattr(namespace, self.dest, roots)
 
 
 def repo_root() -> Path:
@@ -33,35 +43,65 @@ def repo_root() -> Path:
     return _ROOT
 
 
-def assert_inside_repo(path: Union[str, Path]) -> Path:
-    """Resolve *path* and return it if it stays inside the project root.
+def add_bypass_guard_argument(parser, *, default=None, dest="bypass_guard") -> None:
+    """Add the shared external-root option to a command parser."""
+    parser.add_argument(
+        "--bypass-guard",
+        action=_AppendBypassRoot,
+        type=Path,
+        default=[] if default is None else default,
+        dest=dest,
+        metavar="PATH",
+        help="allow guarded operations beneath this absolute external directory",
+    )
 
-    Raises ValueError if the path escapes the repository root.
+
+@contextmanager
+def bypass_guard(roots: Sequence[Path]) -> Iterator[None]:
+    """Temporarily allow guarded paths beneath explicit external roots."""
+    resolved_roots = []
+    for root in roots:
+        if not root.is_absolute() or not root.is_dir():
+            raise ValueError("each --bypass-guard root must be an absolute directory")
+        resolved_roots.append(root.resolve())
+    token = _BYPASS_ROOTS.set(tuple(resolved_roots))
+    try:
+        yield
+    finally:
+        _BYPASS_ROOTS.reset(token)
+
+
+def assert_inside_repo(path: Union[str, Path]) -> Path:
+    """Resolve *path* and return it if it stays inside an allowed root.
+
+    Raises ValueError if the path escapes the repository and bypass roots.
     """
     p = Path(path).resolve()
     root = repo_root().resolve()
-    try:
-        p.relative_to(root)
-    except ValueError:
-        raise ValueError(
-            f"Path '{p}' escapes the repository root '{root}'. "
-            "All file operations must stay inside the project."
-        )
-    return p
+    for allowed_root in (root, *_BYPASS_ROOTS.get()):
+        try:
+            p.relative_to(allowed_root)
+        except ValueError:
+            continue
+        return p
+    raise ValueError(
+        f"Path '{p}' escapes the repository root '{root}'. "
+        "Use --bypass-guard with an explicit external root."
+    )
 
 
 def tmp_path(name: str) -> Path:
-    """Return a path under ./tmp/ for *name*, creating parent dirs.
+    """Return a resolved path under ``./tmp/`` for *name*.
 
-    Raises ValueError if the resolved path escapes ./tmp/ via "..".
+    Raises ValueError if the resolved path escapes ``./tmp/``.
     """
-    root = repo_root()
-    tmp_dir = root / "tmp"
+    tmp_dir = (repo_root() / "tmp").resolve()
     candidate = (tmp_dir / name).resolve()
-    if not str(candidate).startswith(str(tmp_dir.resolve())):
+    try:
+        candidate.relative_to(tmp_dir)
+    except ValueError:
         raise ValueError(
             f"Temp path '{name}' escapes the ./tmp/ directory '{tmp_dir}'. "
             "Use only simple filenames or safe subdirectory names."
-        )
-    candidate.parent.mkdir(parents=True, exist_ok=True)
+        ) from None
     return candidate

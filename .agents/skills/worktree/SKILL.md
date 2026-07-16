@@ -33,11 +33,13 @@ Manage git worktrees: create new worktrees for feature development, prune inacti
 ### Clean up
 1. Remove review files: `rm -f ./reviews/REVIEW_*.md`
 2. Clean tmp directory: `rm -rf ./tmp/*`
-3. Remove pycache: `find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null`
+3. Clean unspecified agent-local artifacts: `rm -rf ./.agents/local/`
+4. Remove pycache: `find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null`
 
 ## Common Pitfalls
 - The script handles branch-exists checks, name sanitization, and path resolution — do NOT pre-verify, just run it
 - The new branch is based on the **current branch**, not `main`. This ensures PRs target the correct parent
-- Worktree paths are always under `<main_repo_root>/.worktrees/` — never nested under another worktree
+- Ordinary worktree paths are under `<main_repo_root>/.worktrees/`. Only `/branch-stack` lifecycle worktrees may be nested under their source worktree as defined by lifecycle state.
 - Only prune worktrees whose PRs are merged or abandoned
 - Always verify before destructive operations
+- Preserve shared `.agents/` infrastructure; only `.agents/local/` is an agent-local cleanup target

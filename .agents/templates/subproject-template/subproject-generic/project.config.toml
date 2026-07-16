@@ -1,25 +1,4 @@
-# Project Configuration
-#
-# This is a language-agnostic project config template.
-# Adapt it for your specific language/toolchain:
-#
-#   Python  → rename to pyproject.toml and use Python-native keys
-#   Node.js → rename to package.json (or keep as reference and use package.json instead)
-#   Rust    → rename to Cargo.toml
-#   Go      → use go.mod
-#   Deno    → use deno.json
-#
-# Below is a generic structure to guide you. Replace or extend as needed.
-
 [project]
 name = "<subproject>"
 version = "0.1.0"
 description = "<description>"
-
-# Linter configuration (if your tool supports TOML)
-# [tool.linter]
-# line-length = 100
-
-# Test runner configuration (if your tool supports TOML)
-# [tool.test]
-# test-paths = ["tests"]

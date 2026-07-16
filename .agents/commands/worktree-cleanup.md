@@ -1,51 +1,26 @@
 ---
-description: Cleans up local artifacts in the current worktree (reviews, dev, tmp, etc.)
+description: Removes selected ignored artifacts from the current worktree
 subtask: true
 ---
 
-Clean up local development artifacts in the current worktree: reviews, dev folders, tmp files, and other gitignored caches.
+# Worktree Cleanup
 
-> Load skill: worktree (for cleaning worktree artifacts)
+**Query**: `$1` one or more of `reviews`, `archives`, `tmp`, `dev`, `agent-local`, `caches`, `logs`; default all.
 
-**Query**: $1 (optional — specific area to clean, e.g. "reviews", "tmp", "caches")
-
-If no query is provided, clean ALL artifact areas.
-
----
-
-## Instructions
-
-1. **Identify the worktree root**: This is the directory containing `.gitignore`
-2. **Clean artifact areas** (skip `.env` and `.env.example`):
-
-   | Area | What to remove | Command |
-   |------|---------------|---------|
-   | Review files | All `./reviews/*.md` except archived | `rm -f ./reviews/REVIEW_*.md` |
-    | Archived reviews | `./reviews/archives/*.md` | `rm -rf ./reviews/archives/` |
-   | Temp files | `./tmp/` | `rm -rf ./tmp/ && mkdir ./tmp/` |
-   | Dev artifacts | `./dev/` | `rm -rf ./dev/` |
-   | Cache dirs | `__pycache__`, `.pytest_cache`, `.ruff_cache`, `.coverage`, `htmlcov` | `rm -rf ./**/__pycache__ ./**/.pytest_cache ./**/.ruff_cache ./**/.coverage ./**/htmlcov` 2>/dev/null |
-   | Logs | `logs/` | `rm -rf ./logs/` |
-
-3. **Report**: List what was cleaned and how much space was freed
+Read root `AGENTS.md` and load `worktree`. Resolve the current worktree root and inventory only selected ignored artifacts. Never include `.env`, `.env.example`, source, specs, documentation, shared `.agents/`, or files outside this worktree. Show exact paths and size, then remove only that confirmed list. Recreate `./tmp/` when selected.
 
 ## Required Context
 
-- Preflight: none
-- Skills: worktree
-- Rules: none
-- Templates: none
-- Mutates files: yes
-- Mutates git history: no
-- Mutates remote: no
-- Requires user confirmation: yes (destructive — removes artifacts)
+- Root `AGENTS.md`; skill `worktree`; current worktree root; ignored-artifact inventory.
 
-## Important
+## Mutations
 
-- **NEVER** remove `.env` or `.env.example` files
-- **NEVER** remove source code, specs, or documentation
-- If `$1` is provided (e.g., "reviews"), only clean that specific area
-- Use `rm -f` to avoid errors on non-existent files
-- This command only affects the current worktree, not other worktrees or the main repo
+- Deletes confirmed local ignored artifacts only; no Git-history or remote mutation.
 
-Begin by identifying the worktree root and cleaning artifact areas.
+## Confirmation
+
+- Fresh confirmation of the exact path list immediately before deletion.
+
+## Failure
+
+- Stop on unresolved root, path escape, tracked file, unsupported area, or deletion failure; report leftovers.

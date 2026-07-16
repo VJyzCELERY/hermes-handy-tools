@@ -19,6 +19,7 @@ __pycache__/
 # Config files with secrets (use config.example.yaml as template)
 *.yaml
 !config.example.yaml
+!/.github/**/*.yaml
 
 # Logs
 logs/
@@ -34,11 +35,11 @@ htmlcov/
 # Local development artifacts
 dev/
 *.local
+/.agents/local/
 
 # Development Artifacts
 */research/*
 *dev/*
-*.github/*
 /.worktrees/
 */reviews/*
 reviews/

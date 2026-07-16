@@ -1,0 +1,64 @@
+name: Technical Debt
+description: Track an intentional implementation compromise by stable debt ID
+title: "[Debt]: "
+labels: ["enhancement"]
+body:
+  - type: input
+    id: debt-id
+    attributes:
+      label: Debt ID
+      description: Stable repository debt ID in the form DEBT-XXXXXXXX.
+      placeholder: DEBT-A1B2C3D4
+    validations:
+      required: true
+
+  - type: textarea
+    id: compromise
+    attributes:
+      label: Current Compromise
+      description: Explain the shortcut, why it exists, and every affected marker location.
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Describe the concrete maintenance, reliability, or performance cost.
+    validations:
+      required: true
+
+  - type: textarea
+    id: cleanup-trigger
+    attributes:
+      label: Cleanup Trigger
+      description: State the objective condition that makes repayment necessary.
+    validations:
+      required: true
+
+  - type: textarea
+    id: intended-replacement
+    attributes:
+      label: Intended Replacement
+      description: Describe the minimum complete behavior that replaces this debt or stub.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: List observable conditions proving the debt and all markers are removed.
+      placeholder: |
+        - [ ] The complete implementation replaces the shortcut
+        - [ ] Every marker sharing this debt ID is removed
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation
+      description: Commands or manual checks that prove repayment is complete.
+    validations:
+      required: true

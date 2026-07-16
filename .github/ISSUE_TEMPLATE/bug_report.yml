@@ -1,0 +1,127 @@
+name: Bug Report
+description: File a bug report to help us improve
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report! Please provide as much detail as possible.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of what the bug is.
+      placeholder: When I try to... it fails with...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: subproject
+    attributes:
+      label: Subproject
+      description: Which subproject does this bug affect?
+      options:
+        - Project-wide
+        - Existing subproject
+        - Other / Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Step-by-step instructions to reproduce the bug.
+      placeholder: |
+        1. Run '...'
+        2. Do '...'
+        3. See error
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen instead?
+      placeholder: It should have...
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: Actual Behavior
+      description: What actually happened? Include error messages, stack traces, etc.
+      placeholder: |
+        Instead, I got:
+        Traceback (most recent call last):
+          ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: List the observable conditions that prove the bug is fixed.
+      placeholder: |
+        - [ ] The reported steps no longer reproduce the failure
+        - [ ] Existing behavior remains unchanged
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation
+      description: Commands or manual checks that should prove the fix.
+      placeholder: Test command, reproduction command, or manual verification steps.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Please provide details about your environment.
+      placeholder: |
+        - OS: [e.g. Ubuntu 22.04, macOS 14.0]
+        - Python version: [e.g. 3.11, 3.12]
+        - Project version: [e.g. 0.1.0]
+        - uv version (if using uv):
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs & Screenshots
+      description: If applicable, add logs, screenshots, or screen recordings to help explain the problem.
+      placeholder: Paste logs or drag and drop screenshots here.
+    validations:
+      required: false
+
+  - type: input
+    id: related-issues
+    attributes:
+      label: Related Sub-Issues
+      description: Link any related sub-issues (e.g., #1, #2, #3)
+      placeholder: "#1, #2, #3"
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Add any other context about the problem here.
+      placeholder: Any other relevant information...
+    validations:
+      required: false

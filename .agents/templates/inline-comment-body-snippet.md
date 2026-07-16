@@ -1,11 +1,26 @@
-**[<issue-id>]** - **[<priority>]** - <short description>
+### [<CATEGORY-SUBJECT-NNN>] - [<severity>] - <short-title>
 
-**Why**: <why it matters>
+**Status**: <status>
 
-**Suggestion**: <suggested fix>
+**Severity**: <severity>
+
+**Category**: <category>
+
+**Location**: <location>
+
+**Description**:
+<description>
+
+**Why It Matters**:
+<why-it-matters>
+
+**Suggested Fix**:
+<suggested-fix>
 
 **How to Validate**:
 ```bash
-<validation command>
-# Expected output (when addressed): <expected result>
+<validation-command>
 ```
+
+**Expected Addressed Result**:
+<expected-addressed-result>

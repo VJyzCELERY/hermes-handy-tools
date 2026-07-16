@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "administrator_merge": false,
+    "auto": false,
+    "commit": false,
+    "merge": false,
+    "pr_create": false,
+    "pr_ready": false,
+    "push": false
+  },
+  "schema_version": 1
+}

@@ -3,6 +3,6 @@
     "path": "<file-path>",
     "line": <line-number>,
     "side": "RIGHT",
-    "body": "<formatted using .agents/templates/inline-comment-body-snippet.md — fill placeholders and inline as escaped JSON string>"
+    "body": "### [<CATEGORY-SUBJECT-NNN>] - [<severity>] - <short-title>\n\n**Status**: <status>\n\n**Severity**: <severity>\n\n**Category**: <category>\n\n**Location**: <location>\n\n**Description**:\n<description>\n\n**Why It Matters**:\n<why-it-matters>\n\n**Suggested Fix**:\n<suggested-fix>\n\n**How to Validate**:\n```bash\n<validation-command>\n```\n\n**Expected Addressed Result**:\n<expected-addressed-result>"
   }
 ]

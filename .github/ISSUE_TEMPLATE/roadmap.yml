@@ -1,0 +1,109 @@
+name: Feature Roadmap
+description: Track a larger project feature or capability gap across multiple stages / milestones
+title: "[Roadmap]: "
+labels: ["roadmap"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for tracking larger project capabilities. Define clear **milestones** so progress is visible at a glance.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Overview
+      description: Brief summary of what this roadmap aims to achieve and why.
+      placeholder: |
+        The project currently lacks support for X. This roadmap tracks the work to add it across N stages.
+    validations:
+      required: true
+
+  - type: textarea
+    id: milestones
+    attributes:
+      label: Milestones
+      description: |
+        Define clear stages / milestones as a checklist. Each milestone should deliver something tangible.
+        Use `- [ ]` for pending and `- [x]` for completed. Indent sub-items under each milestone.
+      placeholder: |
+        - [ ] **Stage 1: Foundation** — Design the core interface and data models
+              - [ ] Design doc: unified LLM Client interface
+              - [ ] Define canonical SSE event schema
+        - [ ] **Stage 2: Provider A** — Implement Provider A integration + SSE normalizer
+              - [ ] Chat completions via Provider A
+              - [ ] SSE Normalizer for Provider A
+              - [ ] Raw SSE pass-through
+        - [ ] **Stage 3: Provider B** — Implement Provider B integration + SSE normalizer
+              - [ ] Chat completions via Provider B
+              - [ ] SSE Normalizer for Provider B
+              - [ ] Raw SSE pass-through
+        - [ ] **Stage 4: Agent Loop Integration** — Consume canonical events in the internal loop
+              - [ ] Tool use support
+              - [ ] Custom loop compatibility
+        - [ ] **Stage 5: Quality** — Tests, documentation, edge cases
+              - [ ] Unit tests for all normalizers
+              - [ ] Integration tests with mocked providers
+              - [ ] Usage documentation
+      value: |
+        - [ ] **Stage 1: Foundation** — Design the core interface and data models
+        - [ ] **Stage 2: Provider A** — Implement Provider A integration + SSE normalizer
+        - [ ] **Stage 3: Provider B** — Implement Provider B integration + SSE normalizer
+        - [ ] **Stage 4: Agent Loop Integration** — Consume canonical events in the internal loop
+        - [ ] **Stage 5: Quality** — Tests, documentation, edge cases
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope-in
+    attributes:
+      label: In Scope
+      description: What is included in this roadmap?
+      placeholder: |
+        - Feature A
+        - Feature B
+        - API endpoint support
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope-out
+    attributes:
+      label: Out of Scope
+      description: What is explicitly NOT included?
+      placeholder: |
+        - Feature C (deferred)
+        - Feature D (separate roadmap)
+    validations:
+      required: false
+
+  - type: textarea
+    id: sub-issues
+    attributes:
+      label: Sub-Issues
+      description: Individual GitHub issues tracking implementation of specific milestones. Link them here.
+      placeholder: |
+        - #1 — Foundation design
+        - #2 — Provider A support
+        - #3 — Provider B support
+    validations:
+      required: false
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: What does this roadmap depend on?
+      placeholder: |
+        - Blocked on #10 — Authentication refactor
+        - Requires upstream library update
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Any other context, references, or notes.
+      placeholder: Relevant discussions, links, architecture decisions...
+    validations:
+      required: false

@@ -1,124 +1,53 @@
 ---
-description: Initializes or updates the .agents structure from a template repository
+description: Initializes or updates agent infrastructure inside this repository
 subtask: true
 ---
 
-Initialize a new `.agents/` directory or update an existing one with improvements from MAIN-PROJECT-TEMPLATE.
+# Setup Project
 
-**Query**: $1 (natural language query — specify the target directory, e.g., "set up .agents in ./my-new-project" or simply "./my-new-project")
-> Load skill: setup-project (for bootstrapping .agents/)
+**Query**: `$1` must be `.`. **Source**: `$2` required template URL.
 
-**Template Source (Optional)**: $2 (GitHub repo URL, defaults to MAIN-PROJECT-TEMPLATE)
+Read root `AGENTS.md`. Set `TEMPLATE_URL=$2` and stop if it is empty. Reject any target other than the current repository root. This command updates the current repository only; it cannot bootstrap a nested or different repository.
 
----
+Preflight access to the canonical template wiki before updating:
 
-## Behavior
+```bash
+uv run python .agents/scripts/setup_project_preflight.py
+```
 
-- **Fresh setup**: `.agents/` doesn't exist → clone entire template.
-- **Soft update**: `.agents/` exists → compare each file against the template:
-  - **New files** (in template, not in project) → copy in
-  - **Updated files** (in both, but template is newer/different) → check if project has customizations:
-    - If project file is mostly similar to template → replace with new template (template is authoritative for `.agents/` infrastructure)
-    - If project file has significant project-specific additions → skip and flag it
-  - **Removed files** (in project, not in template) → keep (project-specific)
-  - **Custom subdirectories** (`reviews/`, `skills/`, project-specific docs) → always preserved
+Preview through the version-driven updater, which clones only into the fixed
+repository-local temporary directory `./tmp/setup-project-template`:
 
----
+```bash
+uv run python .agents/scripts/setup_project.py preview . "$TEMPLATE_URL"
+```
 
-## Instructions
+The exact preview reports `current`, rejects downgrades, and classifies only
+version upgrades. Preserve project-specific files, local reviews, `.agents/local/`,
+and conflicting harness aliases. If the preview has no conflicts, confirm it
+immediately before applying the prepared preview:
 
-1. **Determine target**: `$1` (defaults to current directory)
-2. **Determine source**: `$2` or `https://github.com/VJyzCELERY/MAIN-PROJECT-TEMPLATE`
-3. **Clone template**:
-   ```bash
-   TMP_DIR=$(mktemp -d)
-   git clone --depth 1 "$TEMPLATE_URL" "$TMP_DIR"
-   ```
+```bash
+uv run python .agents/scripts/setup_project.py apply . --confirm
+```
 
-4. **Update `.agents/`**:
-
-   ```bash
-   AGENTS_DIR="$1/.agents"
-   TEMPLATE_AGENTS="$TMP_DIR/.agents"
-   mkdir -p "$AGENTS_DIR"
-
-   echo "=== Soft update: $AGENTS_DIR ==="
-
-   # Walk through every file in the template
-   find "$TEMPLATE_AGENTS" -type f | while read -r tf; do
-     rel="${tf#$TEMPLATE_AGENTS/}"
-     target="$AGENTS_DIR/$rel"
-
-     if [ ! -f "$target" ]; then
-       # NEW file — copy from template
-       mkdir -p "$(dirname "$target")"
-       cp "$tf" "$target"
-       echo "  + $rel (new)"
-     else
-       # EXISTING file — check similarity
-       template_lines=$(wc -l < "$tf")
-       diff_lines=$(diff --brief "$tf" "$target" 2>/dev/null && echo "0" || diff "$tf" "$target" | grep -c '^[<>]' 2>/dev/null || echo "999")
-       total=$((template_lines > 0 ? template_lines : 1))
-       similarity=$(( (total - (diff_lines / 2)) * 100 / total ))
-
-       if [ "$diff_lines" -eq 0 ]; then
-         # IDENTICAL — update to new template version
-         cp "$tf" "$target"
-         echo "  ~ $rel (updated)"
-       elif [ "$similarity" -gt 80 ]; then
-         # HIGHLY SIMILAR — project has minor tweaks, still safe to update
-         cp "$tf" "$target"
-         echo "  ~ $rel (updated — minor project tweaks overwritten, reapply if needed)"
-       else
-         # SIGNIFICANTLY DIFFERENT — project has customizations, skip
-         echo "  · $rel (skipped — project has significant customizations)"
-       fi
-     fi
-   done
-
-   # Ensure .opencode symlink
-   if [ ! -L "$1/.opencode" ]; then
-     ln -sf .agents "$1/.opencode"
-     echo "  + .opencode symlink created"
-   fi
-
-   echo "=== Update complete ==="
-   ```
-
-5. **Clean up**:
-   ```bash
-   rm -rf "$TMP_DIR"
-   ```
-
----
-
-## What Gets Updated vs Preserved
-
-| File Type | Behavior |
-|-----------|----------|
-| Commands (`.agents/commands/*.md`) | Updated from template — template is authoritative |
-| Templates (`.agents/templates/*.md`) | Updated from template |
-| Agent rules (`.agents/docs/agents/*.md`) | Updated from template |
-| Project rules (`.agents/docs/project_rules/*.md`) | Updated if similar (>80%), skipped if heavily customized |
-| Scripts (`.agents/scripts/*.py`) | Updated from template |
-| Skills (`.agents/skills/*/SKILL.md`) | Updated if from template, preserved if project-created |
-| Reviews (`.agents/reviews/`) | Always preserved — project-specific |
-| Custom files (anything project-added) | Always preserved |
+The updater applies only approved upstream changes, creates missing `.opencode`,
+`.codex`, `.claude`, and `.hermes` relative aliases, writes the incoming marker
+last, removes only `./tmp/setup-project-template`, and runs preflight.
 
 ## Required Context
 
-- Preflight: none
-- Skills: setup-project
-- Rules: none
-- Templates: none
-- Mutates files: yes
-- Mutates git history: no
-- Mutates remote: no
-- Requires user confirmation: yes (if target outside project root)
+- Root `AGENTS.md`; resolved root/target/source; `./tmp/`.
 
-## Important
+## Mutations
 
-- Template is authoritative for `.agents/` infrastructure files (commands, templates, docs)
-- Project-specific customizations in `.agents/` are preserved when they differ significantly
-- To force a full refresh, delete `.agents/` and re-run setup
-- The `.opencode` symlink is created if missing
+- Approved files and missing aliases at the current repository root; local clone under `./tmp/`. No Git-history or remote mutation.
+
+## Confirmation
+
+- Confirm the exact updater preview immediately before `apply . --confirm`.
+  Outside-root targets, conflicts, and downgrades are rejected, not confirmable.
+
+## Failure
+
+- Stop on containment/symlink/source/clone/copy/preflight failure. Use only the fixed repository-local temporary path and never clean outside `./tmp/setup-project-template`.

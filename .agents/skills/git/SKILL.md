@@ -4,7 +4,7 @@ description: Rebase branches, clean up commit history safely
 license: MIT
 compatibility: opencode
 metadata:
-  type: command-skill
+  type: infrastructure
 ---
 
 # Skill: git — Rebase and Commit Cleanup
@@ -16,6 +16,7 @@ Safely rebase branches onto targets without duplicating commits, and clean up co
 ## Prerequisites
 
 - Load skill: preflight (for preflight-rebase.py)
+- Read `.agents/rules/008-git-operations.md`; it is the normative rebase policy.
 
 ## Execution
 
@@ -40,9 +41,9 @@ Safely rebase branches onto targets without duplicating commits, and clean up co
 1. Run preflight: `uv run python .agents/scripts/preflight-rebase.py --target <target>`
 2. Check for already-applied commits: `git log --oneline <target>..HEAD`
 3. If no unique commits, exit early
-4. Run: `git rebase <target>`
+4. Resolve the old merge base and run `git rebase --onto <target> <old-base> <branch>`
 5. If conflicts: analyze, present to user, apply their decision
-6. Force push: `git push --force-with-lease origin <branch>`
+6. With explicit push permission, force push: `git push --force-with-lease origin <branch>`
 
 ### Stacked Rebase
 Use when a branch is built on top of another local branch (not `main`).
@@ -51,18 +52,19 @@ Use when a branch is built on top of another local branch (not `main`).
 2. **Rebase parent first** (recurse if parent is also stacked):
    - Switch to parent worktree/branch
    - Rebase parent onto `main` (or its own parent)
-    - Force push parent with `--force-with-lease`
-3. **Rebase this branch onto rebased parent**:
+    - With explicit push permission, force push parent with `--force-with-lease`
+3. **Rebase this branch onto rebased parent** with its recorded old parent:
     ```bash
-    git rebase <parent-branch>
+    git rebase --onto <parent-branch> <old-parent> <branch>
     ```
-4. **Force push**: `git push --force-with-lease origin <branch>`
+   For a verified true linear stack whose affected intermediate refs are not checked out elsewhere, the latest affected branch may instead use `git rebase <new-base> --update-refs`; verify every affected ref afterward.
+4. **Force push**: with explicit push permission, run `git push --force-with-lease origin <branch>`
 5. **Verify**: check `git log --oneline <parent-branch>..HEAD` shows only this branch's unique commits
 
 ### Commit cleanup
 1. List recent commits: `git log --oneline -20`
 2. Identify fixup/revert/duplicate commits
-3. Squash using `git rebase -i` is NOT supported — use soft reset instead:
+3. Interactive rebasing is not supported — use soft reset instead:
    - `git reset --soft <base>` + `git commit -m "message"`
 4. Verify the cleaned history
 

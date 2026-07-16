@@ -1,14 +1,14 @@
 ---
-description: Standards for writing spec.md and design.md documents — template usage, what to include, what to exclude
+description: Normative standards for writing paired spec.md and design.md documents
 globs: "*.md"
 alwaysApply: false
 ---
 
 # Spec & Design Standards
 
-## Critical: Templates Are OUTPUT Guides, NOT Instruction Documents
+## Ownership
 
-The template files (`.agents/templates/spec.md` and `.agents/templates/design.md`) contain **only the output structure** — they define what the final document should look like. All agent instructions for *how* to write these documents live HERE in this rule file.
+This rule owns spec/design authoring policy. `.agents/templates/spec.md` and `.agents/templates/design.md` own output structure only.
 
 **NEVER include any of the following in the output document:**
 - YAML front matter (unless the template explicitly shows content-relevant front matter like `title:`)
@@ -28,6 +28,7 @@ A spec defines **WHAT** users/callers need and **WHY** — not HOW to implement.
 - Highlight anything that could violate KISS, YAGNI, or DRY for architecture review.
 - When done, requirements with `[NEEDS CLARIFICATION]` markers must be resolved before implementation begins.
 - Spec and design are a pair — `design.md` MUST be created in the same directory as `spec.md`.
+- Record the canonical primary issue identity and URL in generated planning artifacts.
 
 ### Mandatory Sections
 - Problem Statement (Goals, Gaps, Non-Goals, Constraints)
