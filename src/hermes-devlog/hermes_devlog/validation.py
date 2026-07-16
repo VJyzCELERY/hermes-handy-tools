@@ -206,6 +206,26 @@ def review_identity(value: object, path: str) -> str:
     return value
 
 
+def authority_reference(value: object) -> str:
+    """Validate a reference to approved state or governing rules."""
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise CoordinatorError(
+            "invalid_question", "authority reference must be a non-empty string"
+        )
+    source, separator, reference = value.partition(":")
+    if not separator or source not in {"state", "rules"} or not reference:
+        raise CoordinatorError(
+            "invalid_question", "authority reference must name state or rules"
+        )
+    if source == "rules":
+        normalized_relative_reference(reference, "question.authority_reference")
+    elif not re.fullmatch(r"[A-Za-z0-9_.-]+", reference):
+        raise CoordinatorError(
+            "invalid_question", "state authority reference is invalid"
+        )
+    return value
+
+
 def json_value(value: object, path: str) -> None:
     """Require a JSON-compatible value for durable evidence fields."""
     if value is None or isinstance(value, (str, int, bool)):
@@ -467,6 +487,7 @@ def _validate_questions(value: object) -> None:
         "escalate",
         "reason",
         "question_class",
+        "authority_reference",
         "status",
     }
     classes = {
@@ -494,18 +515,24 @@ def _validate_questions(value: object) -> None:
             raise CoordinatorError("invalid_state", "question escalation is invalid")
         if "reason" in item and not isinstance(item["reason"], str):
             raise CoordinatorError("invalid_state", "question reason is invalid")
+        if "authority_reference" in item:
+            authority_reference(item["authority_reference"])
         if item["status"] not in QUESTION_RECORD_STATUSES:
             raise CoordinatorError("invalid_state", "question status is invalid")
         answer = item.get("answer")
         escalated = item.get("escalate") is True
         if item["status"] == "answered" and (
-            not isinstance(answer, str) or not answer or escalated
+            not isinstance(answer, str)
+            or not answer
+            or escalated
+            or "authority_reference" not in item
         ):
             raise CoordinatorError("invalid_state", "answered question is incompatible")
         if item["status"] == "needs_user" and (
             answer
             and not escalated
             and item["question_class"] not in SENSITIVE_QUESTION_CLASSES
+            and "authority_reference" in item
         ):
             raise CoordinatorError(
                 "invalid_state", "escalated question is incompatible"

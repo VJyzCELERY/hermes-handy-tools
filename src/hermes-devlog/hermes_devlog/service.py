@@ -10,6 +10,7 @@ from .validation import (
     PROFILE_MATCH_RANK,
     QUESTION_STATUSES,
     activation_payload,
+    authority_reference,
     expected_revision,
     identifier,
     integration_gate,
@@ -527,6 +528,7 @@ def question(goal_id: str, data: Mapping, revision: int) -> dict:
         "escalate",
         "reason",
         "question_class",
+        "authority_reference",
     }
     if (
         set(data) - allowed
@@ -540,13 +542,9 @@ def question(goal_id: str, data: Mapping, revision: int) -> dict:
         )
 
     inferred_class = _question_class(data["question"])
-    question_class = data.get("question_class")
-    if question_class is not None and (
-        not isinstance(question_class, str) or question_class not in QUESTION_CLASSES
-    ):
-        raise CoordinatorError("invalid_question", "unsupported question class")
-    if inferred_class in SENSITIVE_QUESTION_CLASSES or question_class is None:
-        question_class = inferred_class
+    if "authority_reference" in data:
+        authority_reference(data["authority_reference"])
+    question_class = inferred_class
 
     def change(state):
         matching_runs = [
@@ -559,7 +557,12 @@ def question(goal_id: str, data: Mapping, revision: int) -> dict:
                 "invalid_session", "question session must have exactly one running run"
             )
         sensitive = question_class in SENSITIVE_QUESTION_CLASSES
-        escalated = sensitive or bool(data.get("escalate")) or not data.get("answer")
+        approved = "authority_reference" in data and not sensitive
+        escalated = (
+            not approved
+            or bool(data.get("escalate"))
+            or not data.get("answer")
+        )
         item = {
             **dict(data),
             "question_class": question_class,

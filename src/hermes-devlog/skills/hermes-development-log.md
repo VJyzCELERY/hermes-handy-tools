@@ -1,9 +1,8 @@
 # Hermes development log replacement
 
-Use `hermes-devlog` as the small local ledger for a bounded Hermes goal. It is
-not a general journal, backlog, scheduler, daemon, dashboard, or `/goal`
-replacement. Its job is to preserve strict state that makes an interrupted
-workflow resumable without relying on private worker context.
+Use `hermes-devlog` as the local ledger for a bounded Hermes goal. It is not a
+journal, backlog, scheduler, daemon, dashboard, or `/goal` replacement; it
+preserves resumable workflow state.
 
 ## Boundary
 
@@ -25,7 +24,7 @@ tmux, a subprocess, or a notification sender.
 Activate a goal with its immutable released template and commit, command
 manifest hash, local snapshot, selected profile, matching mode, governing
 sources, model route, and allowed permissions. The normal semantic baseline is
-`issue → plan → implement → implementation review/remediation → merge-ready`.
+`issue → plan → plan review → implement → implementation review/remediation → PR delivery → final verification → merge-ready`.
 Record one owned phase run at a time with attempt, session, process identity,
 worktree, command reference, expected and observed evidence, lifecycle status,
 question status, and checkpoint.

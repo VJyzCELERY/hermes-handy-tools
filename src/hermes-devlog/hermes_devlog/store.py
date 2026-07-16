@@ -90,6 +90,9 @@ class StateStore:
         with self.locked():
             if self.state_path.exists() or self.config_path.exists():
                 raise CoordinatorError("already_exists", "goal already exists")
+            activity_size = (
+                self.activity_path.stat().st_size if self.activity_path.exists() else 0
+            )
             try:
                 self._atomic_json(self.config_path, config)
                 self._atomic_json(self.state_path, state)
@@ -100,6 +103,11 @@ class StateStore:
                     path.with_name(f".{path.name}.tmp-{os.getpid()}").unlink(
                         missing_ok=True
                     )
+                if self.activity_path.exists():
+                    with self.activity_path.open("r+") as handle:
+                        handle.truncate(activity_size)
+                    if activity_size == 0:
+                        self.activity_path.unlink(missing_ok=True)
                 raise
         return state
 

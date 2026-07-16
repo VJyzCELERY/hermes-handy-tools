@@ -111,6 +111,24 @@ def test_failed_activation_write_rolls_back(tmp_path, monkeypatch):
     assert activate(payload())["state"]["revision"] == 1
 
 
+def test_failed_activation_activity_append_rolls_back(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    original = StateStore._activity
+
+    def fail_after_append(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        raise OSError("injected activity failure")
+
+    monkeypatch.setattr(StateStore, "_activity", fail_after_append)
+    with pytest.raises(OSError):
+        activate(payload())
+
+    root = tmp_path / "dev-log" / "demo-goal"
+    assert not (root / "config.json").exists()
+    assert not (root / "state.json").exists()
+    assert not (root / "activity.jsonl").exists()
+
+
 def test_stale_revision_is_rejected_without_overwriting(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     result = activate(payload())
@@ -717,7 +735,12 @@ def test_phase_run_persists_question_status(tmp_path, monkeypatch):
 
     result = question(
         "demo-goal",
-        {"session_id": "s1", "question": "which file?", "answer": "service.py"},
+        {
+            "session_id": "s1",
+            "question": "which file?",
+            "answer": "service.py",
+            "authority_reference": "state:policy",
+        },
         2,
     )
 

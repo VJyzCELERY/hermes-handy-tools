@@ -661,6 +661,27 @@ def test_scope_questions_require_user(tmp_path, monkeypatch):
     assert item["status"] == "needs_user"
 
 
+def test_unclassified_question_without_authority_reference_requires_user(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    running_phase()
+
+    result = question(
+        "demo",
+        {
+            "session_id": "s",
+            "question": "Can I make this unrelated change?",
+            "question_class": "general",
+            "answer": "yes",
+        },
+        2,
+    )
+
+    assert result["state"]["questions"][-1]["status"] == "needs_user"
+
+
 def test_activation_requires_profile_name(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     data = activation()
