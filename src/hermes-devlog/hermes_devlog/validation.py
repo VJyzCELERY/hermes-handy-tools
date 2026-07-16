@@ -209,6 +209,8 @@ def validate_state(state: object) -> dict:
                 "title",
                 "parent_id",
                 "repositories",
+                "source_bindings",
+                "completion_contract",
                 "contract",
                 "policy",
                 "disposition",
@@ -237,6 +239,13 @@ def validate_state(state: object) -> dict:
             or not all(isinstance(item, str) for item in node["repositories"])
         ):
             raise CoordinatorError("invalid_state", "goal repositories must be strings")
+        for field in ("source_bindings", "completion_contract"):
+            if field in node:
+                if not isinstance(node[field], (Mapping, list)) or not node[field]:
+                    raise CoordinatorError(
+                        "invalid_state", f"goal {field} must be non-empty"
+                    )
+                json_value(node[field], f"goal.{field}")
         if "contract" in node and not isinstance(node["contract"], Mapping):
             raise CoordinatorError("invalid_state", "goal contract must be an object")
     roots = [
@@ -413,11 +422,20 @@ def validate_state(state: object) -> dict:
     if not isinstance(data.get("discovered_work"), list):
         raise CoordinatorError("invalid_state", "discovered_work must be a list")
     for work in data["discovered_work"]:
-        item = strict_mapping(work, {"id", "title", "disposition"}, "discovered_work")
-        if not isinstance(item.get("id"), str) or item.get("disposition") != "open":
+        item = strict_mapping(
+            work, {"id", "title", "disposition", "outcome"}, "discovered_work"
+        )
+        if not isinstance(item.get("id"), str) or item.get("disposition") not in {
+            "open",
+            "resolved",
+            "deferred",
+            "excluded",
+        }:
             raise CoordinatorError("invalid_state", "discovered work record is invalid")
         if "title" in item and not isinstance(item["title"], str):
             raise CoordinatorError("invalid_state", "discovered work title is invalid")
+        if "outcome" in item:
+            json_value(item["outcome"], "discovered_work.outcome")
 
     gates = strict_mapping(
         data.get("gates"), {"integration", "final_verification"}, "gates"
@@ -429,10 +447,23 @@ def validate_state(state: object) -> dict:
     for gate in gates["integration"]:
         integration_gate(gate)
     completion = strict_mapping(
-        data.get("completion"), {"ready", "terminal"}, "completion"
+        data.get("completion"),
+        {
+            "ready",
+            "terminal",
+            "review_remediation_required",
+            "review_boundary_required",
+        },
+        "completion",
     )
     if not all(
-        isinstance(completion.get(field), bool) for field in ("ready", "terminal")
+        isinstance(completion.get(field), bool)
+        for field in (
+            "ready",
+            "terminal",
+            "review_remediation_required",
+            "review_boundary_required",
+        )
     ):
         raise CoordinatorError("invalid_state", "completion is invalid")
     return data
@@ -443,7 +474,19 @@ def activation_payload(payload: object) -> dict:
     reject_secrets(payload)
     data = strict_mapping(
         payload,
-        {"goal_id", "title", "template", "profile", "route", "permissions", "policy"},
+        {
+            "goal_id",
+            "title",
+            "template",
+            "profile",
+            "route",
+            "permissions",
+            "policy",
+            "repositories",
+            "source_bindings",
+            "completion_contract",
+            "contract",
+        },
         "activation",
     )
     identifier(data.get("goal_id"), "goal_id")
@@ -464,6 +507,30 @@ def activation_payload(payload: object) -> dict:
         raise CoordinatorError(
             "invalid_permissions", "permissions must be a non-empty boolean object"
         )
+    repositories = data.get("repositories")
+    if not isinstance(repositories, list) or not repositories or not all(
+        isinstance(item, str) and item for item in repositories
+    ):
+        raise CoordinatorError(
+            "invalid_repositories", "repositories must be a non-empty string list"
+        )
+    for field in ("source_bindings",):
+        value = data.get(field)
+        if not isinstance(value, (Mapping, list)) or not value:
+            raise CoordinatorError(
+                "invalid_binding", f"{field} must be a non-empty object or list"
+            )
+        json_value(value, f"activation.{field}")
+    contracts = [
+        data[field]
+        for field in ("completion_contract", "contract")
+        if field in data
+    ]
+    if len(contracts) != 1 or not isinstance(contracts[0], Mapping) or not contracts[0]:
+        raise CoordinatorError(
+            "invalid_binding", "one non-empty completion contract is required"
+        )
+    json_value(contracts[0], "activation.contract")
     _policy(data.get("policy", {}))
     return data
 

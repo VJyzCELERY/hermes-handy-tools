@@ -40,6 +40,9 @@ def activation(goal_id="demo", *, merge=False):
         "route": {"model": "model", "variant": "high"},
         "permissions": {"implement": True, "merge": merge},
         "policy": {"merge": merge},
+        "repositories": ["org/demo"],
+        "source_bindings": {"issue": "#1", "spec": "#4"},
+        "completion_contract": {"final_verification": True},
     }
 
 
@@ -86,7 +89,16 @@ def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
     with pytest.raises(CoordinatorError) as error:
         complete("demo", 6)
     assert error.value.code == "incomplete_gates"
-    discovered_work("demo", {"id": "bug", "title": "Bug", "disposition": "deferred"}, 6)
+    discovered_work(
+        "demo",
+        {
+            "id": "bug",
+            "title": "Bug",
+            "disposition": "deferred",
+            "outcome": "deferred to follow-up",
+        },
+        6,
+    )
     gate("demo", "final_verification", True, 7)
     review("demo", {"head": "h", "base": "b", "diff": "d", "findings": []}, 8)
     result = complete("demo", 9)
@@ -148,6 +160,56 @@ def test_persisted_dependency_cycle_is_rejected(tmp_path, monkeypatch):
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_state"
+
+
+def test_malformed_state_returns_structured_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    from hermes_devlog.store import StateStore
+
+    StateStore.from_goal("demo").state_path.write_text("{")
+
+    assert main(["status", json.dumps({"goal_id": "demo"})]) == 1
+    cli_result = json.loads(capsys.readouterr().err)
+    tool_result = hermes_devlog("status", {"goal_id": "demo"})
+
+    assert cli_result == tool_result
+    assert cli_result["error"]["code"] == "invalid_state"
+
+
+def test_root_goal_persists_repositories_and_source_bindings(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    data = activation()
+    result = activate(data)
+    root = result["state"]["goal_graph"]["nodes"]["demo"]
+
+    assert root["repositories"] == data["repositories"]
+    assert root["source_bindings"] == data["source_bindings"]
+    assert root["completion_contract"] == data["completion_contract"]
+
+
+def test_discovered_work_terminal_disposition_is_retained(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    discovered_work(
+        "demo",
+        {
+            "id": "bug",
+            "title": "Bug",
+            "disposition": "excluded",
+            "outcome": "outside agreed scope",
+        },
+        1,
+    )
+
+    item = status("demo")["state"]["discovered_work"][0]
+
+    assert item == {
+        "id": "bug",
+        "title": "Bug",
+        "disposition": "excluded",
+        "outcome": "outside agreed scope",
+    }
 
 
 def test_cli_reports_structured_input_errors(tmp_path, monkeypatch, capsys):

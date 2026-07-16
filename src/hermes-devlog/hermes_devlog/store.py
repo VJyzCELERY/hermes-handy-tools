@@ -41,6 +41,10 @@ class StateStore:
             state = json.loads(self.state_path.read_text())
         except FileNotFoundError as exc:
             raise CoordinatorError("not_found", "goal state does not exist") from exc
+        except json.JSONDecodeError as exc:
+            raise CoordinatorError(
+                "invalid_state", "goal state is not valid JSON"
+            ) from exc
         if not isinstance(state, dict) or state.get("schema_version") != 1:
             raise CoordinatorError(
                 "unsupported_version", "state schema version is unsupported"

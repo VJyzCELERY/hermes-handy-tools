@@ -40,6 +40,9 @@ def activate(payload: Mapping) -> dict:
     """Create a pinned goal and its initial resumable checkpoint."""
     data = activation_payload(payload)
     goal_id = data["goal_id"]
+    contract_field = (
+        "completion_contract" if "completion_contract" in data else "contract"
+    )
     policy = data.get("policy", {})
     config = {
         "schema_version": 1,
@@ -49,6 +52,9 @@ def activate(payload: Mapping) -> dict:
         "profile": deepcopy(data["profile"]),
         "route": deepcopy(data["route"]),
         "permissions": deepcopy(data["permissions"]),
+        "repositories": deepcopy(data["repositories"]),
+        "source_bindings": deepcopy(data["source_bindings"]),
+        contract_field: deepcopy(data[contract_field]),
         "policy": normalized_policy(policy),
     }
     state = {
@@ -62,6 +68,9 @@ def activate(payload: Mapping) -> dict:
                     "id": goal_id,
                     "title": data["title"],
                     "parent_id": None,
+                    "repositories": deepcopy(data["repositories"]),
+                    "source_bindings": deepcopy(data["source_bindings"]),
+                    contract_field: deepcopy(data[contract_field]),
                     "disposition": "open",
                     "policy": normalized_policy(policy),
                 }
@@ -76,7 +85,12 @@ def activate(payload: Mapping) -> dict:
         "gates": {"integration": [], "final_verification": False},
         "capacity": config["policy"]["capacity"],
         "policy": deepcopy(config["policy"]),
-        "completion": {"ready": False, "terminal": False},
+        "completion": {
+            "ready": False,
+            "terminal": False,
+            "review_remediation_required": False,
+            "review_boundary_required": False,
+        },
     }
     return {"state": _store(goal_id).create(config, state)}
 
@@ -314,6 +328,18 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
             raise CoordinatorError(
                 "invalid_transition", f"cannot move from {current} to {target}"
             )
+        active = sum(
+            run.get("status") in {"running", "active", "in_progress"}
+            for run in state["phase_runs"]
+            if isinstance(run, Mapping)
+        )
+        if (
+            data.get("status") in {"running", "active", "in_progress"}
+            and active >= state["capacity"]
+        ):
+            raise CoordinatorError(
+                "capacity_exceeded", "active phase capacity has been reached"
+            )
         if target == "merge_ready" and not state["completion"].get("ready"):
             raise CoordinatorError(
                 "incomplete_gates", "merge-ready requires completed gates"
@@ -325,6 +351,12 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
         if target in {"implement", "remediation"}:
             for item in state["reviews"]:
                 item["valid"] = False
+            if state["completion"]["review_remediation_required"]:
+                state["completion"]["review_remediation_required"] = False
+                state["completion"]["review_boundary_required"] = True
+        elif target == "implementation_review":
+            if state["completion"]["review_boundary_required"]:
+                state["completion"]["review_boundary_required"] = False
         state["phase"] = target
         state["next_action"] = data.get("next_action", f"continue_{target}")
         state["phase_runs"].append(dict(data))
@@ -361,6 +393,8 @@ def review(goal_id: str, data: Mapping, revision: int) -> dict:
                 "valid": not bool(data["findings"]),
             }
         )
+        if data["findings"]:
+            state["completion"]["review_remediation_required"] = True
         state["next_action"] = (
             "remediate_review" if data["findings"] else "continue_implementation"
         )
@@ -442,7 +476,10 @@ def _scheduled_action(state: Mapping) -> str:
     """Choose one ready child without mutating the graph."""
     if state.get("completion", {}).get("terminal"):
         return "merge_if_authorized"
-    if state.get("discovered_work"):
+    if any(
+        item.get("disposition") == "open"
+        for item in state.get("discovered_work", [])
+    ):
         return "dispose_discovered_work"
     if state.get("gates", {}).get("integration"):
         return "resolve_integration_gates"
@@ -495,7 +532,10 @@ def complete(goal_id: str, revision: int) -> dict:
                 "incomplete_workflow", "completion requires implementation review"
             )
         if (
-            state["discovered_work"]
+            any(
+                item.get("disposition") == "open"
+                for item in state["discovered_work"]
+            )
             or state["gates"]["integration"]
             or not state["gates"]["final_verification"]
         ):
@@ -516,6 +556,14 @@ def complete(goal_id: str, revision: int) -> dict:
         ):
             raise CoordinatorError(
                 "stale_review", "stale review evidence cannot complete a goal"
+            )
+        if any(
+            state["completion"].get(field)
+            for field in ("review_remediation_required", "review_boundary_required")
+        ):
+            raise CoordinatorError(
+                "incomplete_workflow",
+                "review findings require remediation and a new implementation review",
             )
         nodes = state["goal_graph"]["nodes"]
         root_id = next(
@@ -549,7 +597,12 @@ def complete(goal_id: str, revision: int) -> dict:
             raise CoordinatorError(
                 "merge_not_authorized", "merge permission and policy are required"
             )
-        state["completion"] = {"ready": True, "terminal": True}
+        state["completion"] = {
+            "ready": True,
+            "terminal": True,
+            "review_remediation_required": False,
+            "review_boundary_required": False,
+        }
         state["phase"] = "merge_ready"
         state["next_action"] = "merge_if_authorized"
         return state
@@ -596,13 +649,15 @@ def discovered_work(goal_id: str, item: Mapping, revision: int) -> dict:
     if not isinstance(item, Mapping):
         raise CoordinatorError("invalid_object", "discovered work must be an object")
     reject_secrets(item)
-    if set(item) - {"id", "title", "disposition"} or not item.get("id"):
+    if set(item) - {"id", "title", "disposition", "outcome"} or not item.get("id"):
         raise CoordinatorError("invalid_discovered_work", "discovered work needs an id")
     identifier(item["id"], "discovered_work.id")
     if "title" in item and not isinstance(item["title"], str):
         raise CoordinatorError(
             "invalid_discovered_work", "discovered work title must be a string"
         )
+    if "outcome" in item:
+        json_value(item["outcome"], "discovered_work.outcome")
     disposition = item.get("disposition", "open")
     if disposition not in {"open", "resolved", "deferred", "excluded"}:
         raise CoordinatorError("invalid_discovered_work", "unsupported disposition")
@@ -611,14 +666,14 @@ def discovered_work(goal_id: str, item: Mapping, revision: int) -> dict:
         state["discovered_work"] = [
             old for old in state["discovered_work"] if old["id"] != item["id"]
         ]
-        if disposition == "open":
-            state["discovered_work"].append(
-                {
-                    "id": item["id"],
-                    "title": item.get("title", ""),
-                    "disposition": "open",
-                }
-            )
+        state["discovered_work"].append(
+            {
+                "id": item["id"],
+                "title": item.get("title", ""),
+                "disposition": disposition,
+                "outcome": item.get("outcome"),
+            }
+        )
         return state
 
     return _mutate(goal_id, revision, "discovered_work", change)

@@ -35,6 +35,9 @@ def payload():
         "profile": {"name": "native", "match": "native", "sources": []},
         "route": {"model": "openai/gpt-5.6-luna", "variant": "high"},
         "permissions": {"implement": True, "merge": False},
+        "repositories": ["org/demo"],
+        "source_bindings": {"issue": "#1", "spec": "#4"},
+        "completion_contract": {"final_verification": True},
     }
 
 
@@ -132,9 +135,15 @@ def test_completion_requires_clean_review_children_and_dependencies(
         complete("demo-goal", 8)
     assert error.value.code == "stale_review"
 
-    review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 8)
+    phase_data["phase"] = "remediation"
+    phase_data["next_action"] = "implementation_review"
+    phase("demo-goal", phase_data, 8)
+    phase_data["phase"] = "implementation_review"
+    phase_data["next_action"] = "verify"
+    phase("demo-goal", phase_data, 9)
+    review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 10)
     with pytest.raises(CoordinatorError) as error:
-        complete("demo-goal", 9)
+        complete("demo-goal", 11)
     assert error.value.code == "incomplete_children"
     assert StateStore.from_goal("demo-goal").read()["completion"]["terminal"] is False
 
@@ -325,5 +334,87 @@ def test_completion_requires_implementation_review_after_remediation(
 
     with pytest.raises(CoordinatorError) as error:
         complete("demo-goal", 6)
+
+    assert error.value.code == "incomplete_workflow"
+
+
+def test_active_phase_runs_respect_capacity(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    data = payload()
+    data["policy"] = {"capacity": 1}
+    activate(data)
+    phase_data = {
+        "phase": "plan",
+        "attempt": 1,
+        "owner": "planner",
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "s1",
+        "process_id": "p1",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "plan",
+        "status": "running",
+    }
+    phase("demo-goal", phase_data, 1)
+    before = StateStore.from_goal("demo-goal").read()
+    phase_data.update({"session_id": "s2", "process_id": "p2"})
+
+    with pytest.raises(CoordinatorError) as error:
+        phase("demo-goal", phase_data, 2)
+
+    assert error.value.code == "capacity_exceeded"
+    assert StateStore.from_goal("demo-goal").read() == before
+
+
+def test_completion_requires_remediation_after_review_findings(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    data = payload()
+    data["permissions"]["merge"] = True
+    data["policy"] = {"merge": True}
+    activate(data)
+    phase_data = {
+        "phase": "plan",
+        "owner": "planner",
+        "attempt": 1,
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "s",
+        "process_id": "p",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "implement",
+    }
+    phase("demo-goal", phase_data, 1)
+    phase_data.update({"phase": "implement", "next_action": "review"})
+    phase("demo-goal", phase_data, 2)
+    phase_data.update(
+        {"phase": "implementation_review", "next_action": "verify"}
+    )
+    phase("demo-goal", phase_data, 3)
+    gate("demo-goal", "final_verification", True, 4)
+    review(
+        "demo-goal",
+        {"head": "h", "base": "b", "diff": "d", "findings": ["open"]},
+        5,
+    )
+    review(
+        "demo-goal",
+        {"head": "h", "base": "b", "diff": "d", "findings": []},
+        6,
+    )
+
+    with pytest.raises(CoordinatorError) as error:
+        complete("demo-goal", 7)
 
     assert error.value.code == "incomplete_workflow"

@@ -18,6 +18,9 @@ def test_activation_persists_pinned_state(tmp_path, monkeypatch, capsys):
         "profile": {"name": "native", "match": "native", "sources": ["AGENTS.md"]},
         "route": {"model": "openai/gpt-5.6-luna", "variant": "high"},
         "permissions": {"claim": True, "implement": True, "merge": False},
+        "repositories": ["org/demo"],
+        "source_bindings": {"issue": "#1", "spec": "#4"},
+        "completion_contract": {"final_verification": True},
     }
 
     assert main(["activate", json.dumps(payload)]) == 0
