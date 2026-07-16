@@ -270,6 +270,7 @@ def validate_state(state: object) -> dict:
     dependencies = graph.get("dependencies")
     if not isinstance(dependencies, list):
         raise CoordinatorError("invalid_state", "goal dependencies must be a list")
+    dependency_graph = {node_id: [] for node_id in nodes}
     for edge in dependencies:
         item = strict_mapping(edge, {"blocker", "blocked"}, "dependency")
         if not all(isinstance(item.get(key), str) for key in ("blocker", "blocked")):
@@ -278,6 +279,26 @@ def validate_state(state: object) -> dict:
             )
         if item["blocker"] not in nodes or item["blocked"] not in nodes:
             raise CoordinatorError("invalid_state", "dependency endpoint is missing")
+        dependency_graph[item["blocker"]].append(item["blocked"])
+
+    visiting = set()
+    visited = set()
+
+    def walk(node_id: str) -> None:
+        if node_id in visiting:
+            raise CoordinatorError(
+                "invalid_state", "dependency graph must be acyclic"
+            )
+        if node_id in visited:
+            return
+        visiting.add(node_id)
+        for child_id in dependency_graph[node_id]:
+            walk(child_id)
+        visiting.remove(node_id)
+        visited.add(node_id)
+
+    for node_id in dependency_graph:
+        walk(node_id)
 
     if not isinstance(data.get("work_items"), Mapping):
         raise CoordinatorError("invalid_state", "work_items must be an object")

@@ -93,6 +93,63 @@ def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
     assert result["state"]["completion"]["terminal"] is True
 
 
+def test_question_class_cannot_bypass_sensitive_escalation(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+
+    result = question(
+        "demo",
+        {
+            "session_id": "s",
+            "question": "May I merge this change?",
+            "question_class": "general",
+            "answer": "yes",
+        },
+        1,
+    )
+
+    item = result["state"]["questions"][-1]
+    assert item["question_class"] == "merge"
+    assert item["status"] == "needs_user"
+
+
+def test_non_string_question_returns_structured_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    payload = {
+        "goal_id": "demo",
+        "data": {"session_id": "s", "question": 1},
+        "expected_revision": 1,
+    }
+
+    assert main(["question", json.dumps(payload)]) == 1
+    cli_result = json.loads(capsys.readouterr().err)
+    tool_result = hermes_devlog("question", payload)
+
+    assert cli_result == tool_result
+    assert cli_result["error"]["code"] == "invalid_question"
+
+
+def test_persisted_dependency_cycle_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    add_goal("demo", {"id": "child", "title": "Child"}, 1)
+    add_dependency("demo", "demo", "child", 2)
+
+    from hermes_devlog.store import StateStore
+
+    path = StateStore.from_goal("demo").state_path
+    state = json.loads(path.read_text())
+    state["goal_graph"]["dependencies"].append(
+        {"blocker": "child", "blocked": "demo"}
+    )
+    path.write_text(json.dumps(state))
+
+    result = hermes_devlog("status", {"goal_id": "demo"})
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_state"
+
+
 def test_cli_reports_structured_input_errors(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     assert main(["unknown", "{}"]) == 1

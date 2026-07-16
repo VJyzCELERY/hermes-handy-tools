@@ -24,6 +24,12 @@ QUESTION_CLASSES = {
     "external_approval",
     "merge",
 }
+SENSITIVE_QUESTION_CLASSES = {
+    "credentials",
+    "policy",
+    "external_approval",
+    "merge",
+}
 
 
 def _store(goal_id: str) -> StateStore:
@@ -376,22 +382,28 @@ def question(goal_id: str, data: Mapping, revision: int) -> dict:
         "reason",
         "question_class",
     }
-    if set(data) - allowed or not data.get("session_id") or not data.get("question"):
+    if (
+        set(data) - allowed
+        or not isinstance(data.get("session_id"), str)
+        or not data["session_id"]
+        or not isinstance(data.get("question"), str)
+        or not data["question"]
+    ):
         raise CoordinatorError(
             "invalid_question", "session_id and question are required"
         )
 
-    question_class = data.get("question_class") or _question_class(data["question"])
-    if not isinstance(question_class, str) or question_class not in QUESTION_CLASSES:
+    inferred_class = _question_class(data["question"])
+    question_class = data.get("question_class")
+    if question_class is not None and (
+        not isinstance(question_class, str) or question_class not in QUESTION_CLASSES
+    ):
         raise CoordinatorError("invalid_question", "unsupported question class")
+    if inferred_class in SENSITIVE_QUESTION_CLASSES or question_class is None:
+        question_class = inferred_class
 
     def change(state):
-        sensitive = question_class in {
-            "credentials",
-            "policy",
-            "external_approval",
-            "merge",
-        }
+        sensitive = question_class in SENSITIVE_QUESTION_CLASSES
         escalated = sensitive or bool(data.get("escalate")) or not data.get("answer")
         item = {
             **dict(data),
