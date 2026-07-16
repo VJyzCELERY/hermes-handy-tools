@@ -164,6 +164,54 @@ def test_child_policy_cannot_broaden_merge_authority(tmp_path, monkeypatch):
     assert error.value.code == "policy_broadening"
 
 
+def test_merge_permission_gate(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    phase_data = {
+        "phase": "plan",
+        "owner": "planner",
+        "attempt": 1,
+        "session_id": "s",
+        "process_id": "p",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "implement",
+    }
+    phase("demo-goal", phase_data, 1)
+    phase_data["phase"] = "implement"
+    phase_data["next_action"] = "implementation_review"
+    phase("demo-goal", phase_data, 2)
+    phase_data["phase"] = "implementation_review"
+    phase_data["next_action"] = "verify"
+    phase("demo-goal", phase_data, 3)
+    gate("demo-goal", "final_verification", True, 4)
+    review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 5)
+
+    with pytest.raises(CoordinatorError) as error:
+        complete("demo-goal", 6)
+
+    assert error.value.code == "merge_not_authorized"
+    assert StateStore.from_goal("demo-goal").read()["phase"] != "merge_ready"
+
+
+def test_child_policy_inherits(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    data = payload()
+    data["policy"] = {"notifications": False}
+    activate(data)
+
+    result = add_goal("demo-goal", {"id": "child", "title": "Child"}, 1)
+
+    assert result["state"]["goal_graph"]["nodes"]["child"]["policy"] == {
+        "capacity": 1,
+        "notifications": False,
+        "merge": False,
+        "discovered_work": True,
+    }
+
+
 def test_sensitive_question_always_needs_user(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(payload())

@@ -112,7 +112,10 @@ def add_goal(goal_id: str, node: Mapping, revision: int) -> dict:
         parent = nodes[parent_id]
         parent_policy = dict(state.get("policy", {}))
         parent_policy.update(parent.get("policy", {}))
-        child_policy = normalized_policy(child_policy)
+        normalized_child_policy = normalized_policy(child_policy)
+        child_policy = {
+            field: normalized_child_policy[field] for field in child_policy
+        }
         for field, child_value in child_policy.items():
             parent_value = parent_policy.get(field, normalized_policy({})[field])
             if field == "capacity" and child_value > parent_value:
@@ -416,6 +419,8 @@ def next_action(goal_id: str) -> dict:
 
 def complete(goal_id: str, revision: int) -> dict:
     """Mark a goal merge-ready only after every completion gate passes."""
+    store = _store(goal_id)
+    config = store.read_config()
 
     def change(state):
         if state.get("phase") not in {"implementation_review", "remediation"}:
@@ -464,12 +469,20 @@ def complete(goal_id: str, revision: int) -> dict:
             raise CoordinatorError(
                 "incomplete_dependencies", "dependency blockers are unresolved"
             )
+        if (
+            not config["permissions"].get("merge", False)
+            or not config["policy"].get("merge", False)
+            or not state["policy"].get("merge", False)
+        ):
+            raise CoordinatorError(
+                "merge_not_authorized", "merge permission and policy are required"
+            )
         state["completion"] = {"ready": True, "terminal": True}
         state["phase"] = "merge_ready"
         state["next_action"] = "merge_if_authorized"
         return state
 
-    return _mutate(goal_id, revision, "complete", change)
+    return {"state": store.mutate(revision, "complete", change)}
 
 
 def gate(goal_id: str, name: str, value: object, revision: int) -> dict:

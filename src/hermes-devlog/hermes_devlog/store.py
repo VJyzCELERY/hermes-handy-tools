@@ -9,7 +9,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .errors import CoordinatorError
-from .validation import expected_revision, identifier, reject_secrets, validate_state
+from .validation import (
+    activation_payload,
+    expected_revision,
+    identifier,
+    reject_secrets,
+    validate_state,
+)
 
 
 class StateStore:
@@ -41,6 +47,28 @@ class StateStore:
             )
         reject_secrets(state)
         return validate_state(state)
+
+    def read_config(self) -> dict:
+        """Read and validate the immutable activation configuration."""
+        try:
+            config = json.loads(self.config_path.read_text())
+        except FileNotFoundError as exc:
+            raise CoordinatorError("not_found", "goal config does not exist") from exc
+        except json.JSONDecodeError as exc:
+            raise CoordinatorError(
+                "invalid_state", "goal config is not valid JSON"
+            ) from exc
+        if not isinstance(config, dict) or config.get("schema_version") != 1:
+            raise CoordinatorError(
+                "invalid_state", "goal config version is unsupported"
+            )
+        config = {
+            key: value for key, value in config.items() if key != "schema_version"
+        }
+        try:
+            return activation_payload(config)
+        except CoordinatorError as exc:
+            raise CoordinatorError("invalid_state", "goal config is invalid") from exc
 
     @contextmanager
     def locked(self):

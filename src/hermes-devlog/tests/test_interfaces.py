@@ -26,7 +26,7 @@ from hermes_devlog.validation import (
 )
 
 
-def activation(goal_id="demo"):
+def activation(goal_id="demo", *, merge=False):
     return {
         "goal_id": goal_id,
         "title": "Demo",
@@ -38,7 +38,8 @@ def activation(goal_id="demo"):
         },
         "profile": {"name": "fallback", "match": "fallback", "sources": []},
         "route": {"model": "model", "variant": "high"},
-        "permissions": {"implement": True, "merge": False},
+        "permissions": {"implement": True, "merge": merge},
+        "policy": {"merge": merge},
     }
 
 
@@ -56,7 +57,7 @@ def test_cli_and_custom_tool_have_equivalent_activation(tmp_path, monkeypatch, c
 
 def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    activate(activation())
+    activate(activation(merge=True))
     phase_data = {
         "phase": "plan",
         "owner": "planner",
@@ -124,6 +125,32 @@ def test_unknown_persisted_state_field_is_rejected(tmp_path, monkeypatch):
     with pytest.raises(CoordinatorError) as error:
         status("demo")
     assert error.value.code == "unknown_field"
+
+
+@pytest.mark.parametrize("topology", ["orphan", "cycle", "multiple_roots"])
+def test_containment_topology_is_validated(topology, tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    if topology != "orphan":
+        add_goal("demo", {"id": "child", "title": "Child"}, 1)
+    from hermes_devlog.store import StateStore
+
+    path = StateStore.from_goal("demo").state_path
+    state = json.loads(path.read_text())
+    nodes = state["goal_graph"]["nodes"]
+    if topology == "orphan":
+        nodes["demo"]["parent_id"] = "missing"
+    elif topology == "cycle":
+        nodes["demo"]["parent_id"] = "child"
+        nodes["child"]["parent_id"] = "demo"
+    else:
+        nodes["child"]["parent_id"] = None
+    path.write_text(json.dumps(state))
+
+    with pytest.raises(CoordinatorError) as error:
+        status("demo")
+
+    assert error.value.code == "invalid_state"
 
 
 def test_service_rejects_invalid_graphs_and_records_workflow(tmp_path, monkeypatch):

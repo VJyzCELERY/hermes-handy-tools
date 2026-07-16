@@ -225,6 +225,34 @@ def validate_state(state: object) -> dict:
             raise CoordinatorError("invalid_state", "goal repositories must be strings")
         if "contract" in node and not isinstance(node["contract"], Mapping):
             raise CoordinatorError("invalid_state", "goal contract must be an object")
+    roots = [
+        node_id for node_id, node in nodes.items() if node.get("parent_id") is None
+    ]
+    if len(roots) != 1:
+        raise CoordinatorError(
+            "invalid_state", "goal graph must have exactly one root"
+        )
+    for node in nodes.values():
+        parent_id = node.get("parent_id")
+        if parent_id is not None and parent_id not in nodes:
+            raise CoordinatorError("invalid_state", "goal parent is missing")
+    visited = set()
+    visiting = set()
+
+    def walk(node_id: str) -> None:
+        if node_id in visiting:
+            raise CoordinatorError("invalid_state", "goal containment must be acyclic")
+        if node_id in visited:
+            return
+        visiting.add(node_id)
+        parent_id = nodes[node_id].get("parent_id")
+        if parent_id is not None:
+            walk(parent_id)
+        visiting.remove(node_id)
+        visited.add(node_id)
+
+    for node_id in nodes:
+        walk(node_id)
     dependencies = graph.get("dependencies")
     if not isinstance(dependencies, list):
         raise CoordinatorError("invalid_state", "goal dependencies must be a list")
