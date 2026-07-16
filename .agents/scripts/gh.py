@@ -2243,10 +2243,7 @@ def cmd_specs_ensure(args):
         if code:
             print(f"[FAIL] Could not create spec label: {error}", file=sys.stderr)
             sys.exit(1)
-    body = (
-        f"# Specs: {args.title.strip()}\n\nPrimary Issue: #{primary}\n\n"
-        "**Current Revision**: none\n\n## Revision History\n"
-    )
+    body = f"# Specs: {args.title.strip()}\n\nPrimary Issue: #{primary}\n"
     created, error, code = api(
         "POST", "issues", {"title": title, "body": body, "labels": ["spec"]}
     )
@@ -2258,8 +2255,8 @@ def cmd_specs_ensure(args):
     _print_specs_result(result, args.format)
 
 
-def _specs_document(path, name, revision):
-    """Read one complete revision document after repository-bound validation."""
+def _specs_document(path, name):
+    """Read one complete canonical document after repository-bound validation."""
     if not check_file(path):
         sys.exit(1)
     try:
@@ -2267,70 +2264,127 @@ def _specs_document(path, name, revision):
     except OSError as error:
         print(f"[FAIL] Could not read {name} document: {error}", file=sys.stderr)
         sys.exit(1)
-    return f"## Revision {revision}: {name.title()}\n\n{content}"
+    return f"## {name.title()}\n\n{content}"
 
 
-def _specs_index(body, revision, documents):
-    """Advance the mutable index while retaining every prior revision entry."""
-    if "## Revision History" not in body:
-        print("[FAIL] Specs issue has no canonical revision index", file=sys.stderr)
-        sys.exit(1)
-    if not re.search(r"(?m)^\*\*Current Revision\*\*:.*$", body):
-        print("[FAIL] Specs issue has no current-revision marker", file=sys.stderr)
-        sys.exit(1)
-    labels = {
-        "spec": "Spec",
-        "design": "Design",
-        "plan": "Implementation Plan",
-        "task": "Tasks",
-    }
-    current_links = "\n".join(
-        f"- **{labels[name]}**: [{labels[name]}]({url})"
-        for name, url in documents.items()
-    )
-    current = re.sub(
-        r"(?m)^\*\*Current Revision\*\*:.*$(?:\n- \*\*(?:Spec|Design|"
-        r"Implementation Plan|Tasks)\*\*:.*$)*",
-        f"**Current Revision**: {revision}\n{current_links}",
+def _specs_index(body, documents):
+    """Render the immutable four-document index after initialization."""
+    base = re.sub(
+        r"\n+\*\*Current Revision\*\*: none\s*\n+## Revision History\s*\Z",
+        "",
         body,
-        count=1,
     )
-    links = ", ".join(f"[{name}]({url})" for name, url in documents.items())
-    return f"{current.rstrip()}\n\n- Revision {revision}: {links}\n"
+    links = "".join(f"- {name}: {documents[name]}\n" for name in _SPECS_DOCUMENTS)
+    return f"{base.rstrip()}\n\n## Documents\n\n{links}"
 
 
-def _specs_current_revision(body):
-    """Return the current revision or stop on a malformed index marker."""
-    markers = re.findall(
-        r"(?m)^\*\*Current Revision\*\*: (none|[1-9][0-9]*)\s*$", body
+_SPECS_DOCUMENTS = ("spec", "design", "plan", "task")
+_SPECS_LEGACY_LABELS = {
+    "spec": "Spec",
+    "design": "Design",
+    "plan": "Implementation Plan",
+    "task": "Tasks",
+}
+
+
+def _specs_comment_id(url, number, repository):
+    """Validate one indexed comment URL and return its comment ID."""
+    match = re.fullmatch(
+        r"https://github\.com/([^/]+/[^/]+)/issues/([1-9][0-9]*)"
+        r"#issuecomment-([1-9][0-9]*)",
+        url if isinstance(url, str) else "",
+        re.I,
     )
-    if not markers:
-        print("[FAIL] Specs issue has no valid current-revision marker", file=sys.stderr)
-        sys.exit(1)
-    if len(markers) > 1:
+    if (
+        not match
+        or match.group(1).lower() != repository.lower()
+        or int(match.group(2)) != number
+    ):
         print(
-            "[FAIL] Specs issue must have exactly one valid current-revision marker",
+            "[FAIL] Specs index contains a malformed or foreign link", file=sys.stderr
+        )
+        sys.exit(1)
+    return match.group(3)
+
+
+def _validate_specs_references(references, number, repository):
+    """Validate complete, unique references for the current Specs issue."""
+    if list(references) != list(_SPECS_DOCUMENTS):
+        print(
+            "[FAIL] Specs index must contain exactly four document keys",
             file=sys.stderr,
         )
         sys.exit(1)
-    return 0 if markers[0] == "none" else int(markers[0])
+    ids = [_specs_comment_id(url, number, repository) for url in references.values()]
+    if len(set(ids)) != len(ids):
+        print("[FAIL] Specs index contains duplicate comment links", file=sys.stderr)
+        sys.exit(1)
+    return references
 
 
-def _specs_comment_url(comment, number):
+def _specs_references(body, number, repository):
+    """Parse the strict index or the shipped current-document link block."""
+    document_markers = re.findall(r"(?m)^## Documents\s*$", body)
+    if document_markers:
+        match = re.search(r"(?ms)^## Documents\n\n((?:- [^\n]+\n)+)\Z", body)
+        if len(document_markers) != 1 or not match:
+            print("[FAIL] Specs issue has a malformed document index", file=sys.stderr)
+            sys.exit(1)
+        entries = re.findall(r"(?m)^- ([a-z]+): (https://[^\s]+)$", match.group(1))
+        if len(entries) != len(_SPECS_DOCUMENTS):
+            print("[FAIL] Specs issue has a malformed document index", file=sys.stderr)
+            sys.exit(1)
+        return _validate_specs_references(dict(entries), number, repository)
+
+    if re.fullmatch(
+        r"# Specs: [^\n]+\n\nPrimary Issue: #[1-9][0-9]*\n"
+        r"(?:\n\*\*Current Revision\*\*: none\n\n## Revision History\n)?",
+        body,
+    ):
+        return None
+    revision_markers = re.findall(
+        r"(?m)^\*\*Current Revision\*\*: (none|[1-9][0-9]*)\s*$", body
+    )
+    legacy_lines = re.findall(
+        r"(?m)^- \*\*(Spec|Design|Implementation Plan|Tasks)\*\*: ", body
+    )
+    if len(revision_markers) != 1 or revision_markers[0] == "none":
+        print(
+            "[FAIL] Specs issue has a malformed current-document index", file=sys.stderr
+        )
+        sys.exit(1)
+    pattern = r"(?m)^\*\*Current Revision\*\*: [1-9][0-9]*\n" + "\n".join(
+        rf"- \*\*{re.escape(label)}\*\*: \[{re.escape(label)}\]\((https://[^\s)]+)\)$"
+        for label in _SPECS_LEGACY_LABELS.values()
+    )
+    match = re.search(pattern, body)
+    if not match or len(legacy_lines) != len(_SPECS_DOCUMENTS):
+        print(
+            "[FAIL] Specs issue has a malformed current-document index", file=sys.stderr
+        )
+        sys.exit(1)
+    references = dict(zip(_SPECS_DOCUMENTS, match.groups(), strict=True))
+    return _validate_specs_references(references, number, repository)
+
+
+def _specs_comment_url(comment, number, repository):
     """Return one validated Specs comment URL."""
     url = comment.get("html_url") if isinstance(comment, dict) else None
-    if not isinstance(url, str) or not re.fullmatch(
-        rf"https://github\.com/[^/]+/[^/]+/issues/{number}#issuecomment-[1-9][0-9]*",
-        url,
-        re.I,
-    ):
-        print("[FAIL] GitHub returned malformed Specs comment URL", file=sys.stderr)
-        sys.exit(1)
+    _specs_comment_id(url, number, repository)
     return url
 
 
-def cmd_specs_publish(args):
-    """Append one complete document revision and advance its Specs issue index."""
+def _specs_comment_content(body, name):
+    """Return document content from canonical or legacy comment wrappers."""
+    canonical = f"## {name.title()}\n\n"
+    if body.startswith(canonical):
+        return body.removeprefix(canonical)
+    match = re.match(rf"## Revision [1-9][0-9]*: {name.title()}\n\n", body)
+    return body[match.end() :] if match else None
+
+
+def _specs_publish_context(args):
+    """Validate the target Specs issue before reading documents or writing."""
     if args.number < 1 or args.primary < 1 or args.revision < 1:
         print("[FAIL] Specs issue inputs must be positive", file=sys.stderr)
         sys.exit(1)
@@ -2352,15 +2406,16 @@ def cmd_specs_publish(args):
     if not _has_primary_issue_marker(body, args.primary):
         print("[FAIL] Specs issue does not identify the primary issue", file=sys.stderr)
         sys.exit(1)
-    current_revision = _specs_current_revision(body)
-    if args.revision != current_revision + 1:
-        print("[FAIL] Specs revision must be the next consecutive revision", file=sys.stderr)
-        sys.exit(1)
-    documents = {
-        name: _specs_document(getattr(args, name), name, args.revision)
-        for name in ("spec", "design", "plan", "task")
-    }
-    comments, error, code = api("GET", f"issues/{args.number}/comments?per_page=100", paginate=True)
+    repository = get_owner_repo()
+    references = _specs_references(body, args.number, repository)
+    return body, repository, references
+
+
+def _specs_comments(number):
+    """Fetch the complete validated Specs comment list."""
+    comments, error, code = api(
+        "GET", f"issues/{number}/comments?per_page=100", paginate=True
+    )
     if code:
         print(f"[FAIL] Could not inspect Specs comments: {error}", file=sys.stderr)
         sys.exit(1)
@@ -2368,37 +2423,97 @@ def cmd_specs_publish(args):
     if not isinstance(comment_data, list):
         print("[FAIL] GitHub returned malformed Specs comment JSON", file=sys.stderr)
         sys.exit(1)
+    return comment_data
+
+
+def _initialize_specs(number, body, repository, documents, comments):
+    """Resume initialization, create missing comments, and write the index once."""
     references = {}
     for name, content in documents.items():
-        heading = f"## Revision {args.revision}: {name.title()}\n\n"
+        heading = f"## {name.title()}\n\n"
         matching = [
             comment
-            for comment in comment_data
+            for comment in comments
             if isinstance(comment, dict)
             and isinstance(comment.get("body"), str)
             and comment["body"].startswith(heading)
         ]
         if len(matching) > 1 or (matching and matching[0]["body"] != content):
-            print("[FAIL] Specs revision has conflicting document comments", file=sys.stderr)
+            print(
+                "[FAIL] Specs initialization has conflicting comments", file=sys.stderr
+            )
             sys.exit(1)
         if matching:
-            references[name] = _specs_comment_url(matching[0], args.number)
+            references[name] = _specs_comment_url(matching[0], number, repository)
     for name, content in documents.items():
         if name in references:
             continue
-        comment, error, code = api("POST", f"issues/{args.number}/comments", {"body": content})
+        comment, error, code = api(
+            "POST", f"issues/{number}/comments", {"body": content}
+        )
         if code:
-            print(f"[FAIL] Could not publish {name} revision: {error}", file=sys.stderr)
+            print(f"[FAIL] Could not publish {name} document: {error}", file=sys.stderr)
             sys.exit(1)
         references[name] = _specs_comment_url(
-            _json_response(comment, "Specs comment"), args.number
+            _json_response(comment, "Specs comment"), number, repository
         )
-    _, error, code = api("PATCH", f"issues/{args.number}", {"body": _specs_index(body, args.revision, references)})
+    _, error, code = api(
+        "PATCH", f"issues/{number}", {"body": _specs_index(body, references)}
+    )
     if code:
-        print(f"[FAIL] Could not update Specs index: {error}", file=sys.stderr)
+        print(f"[FAIL] Could not initialize Specs index: {error}", file=sys.stderr)
         sys.exit(1)
+    return references
+
+
+def _update_specs(number, repository, references, documents, comments):
+    """Resolve every indexed comment before editing changed document bodies."""
+    resolved = {}
+    for name, url in references.items():
+        matching = [
+            comment
+            for comment in comments
+            if isinstance(comment, dict) and comment.get("html_url") == url
+        ]
+        if len(matching) != 1 or not isinstance(matching[0].get("body"), str):
+            print("[FAIL] Specs index references a missing comment", file=sys.stderr)
+            sys.exit(1)
+        resolved[name] = matching[0]
+    for name, comment in resolved.items():
+        desired_content = documents[name].split("\n\n", 1)[1]
+        if _specs_comment_content(comment["body"], name) == desired_content:
+            continue
+        comment_id = _specs_comment_id(references[name], number, repository)
+        _, error, code = api(
+            "PATCH", f"issues/comments/{comment_id}", {"body": documents[name]}
+        )
+        if code:
+            print(f"[FAIL] Could not update {name} document: {error}", file=sys.stderr)
+            sys.exit(1)
+    return references
+
+
+def cmd_specs_publish(args):
+    """Initialize or update four stable indexed Specs comments."""
+    body, repository, references = _specs_publish_context(args)
+    documents = {
+        name: _specs_document(getattr(args, name), name) for name in _SPECS_DOCUMENTS
+    }
+    comments = _specs_comments(args.number)
+    if references is None:
+        references = _initialize_specs(
+            args.number, body, repository, documents, comments
+        )
+    else:
+        references = _update_specs(
+            args.number, repository, references, documents, comments
+        )
     result = {"number": args.number, "revision": args.revision, "documents": references}
-    print(json.dumps(result, sort_keys=True) if args.format == "json" else f"[OK] Published Specs revision {args.revision}")
+    print(
+        json.dumps(result, sort_keys=True)
+        if args.format == "json"
+        else "[OK] Published indexed Specs documents"
+    )
 
 
 def cmd_update_issue_body(args):
@@ -2630,7 +2745,9 @@ def main():
     ensure.add_argument("title", help="Primary issue title")
     ensure.add_argument("--format", choices=["human", "json"], default="human")
     ensure.set_defaults(func=cmd_specs_ensure)
-    publish = specs_sub.add_parser("publish", help="Append one complete Specs revision")
+    publish = specs_sub.add_parser(
+        "publish", help="Initialize or update indexed Specs documents"
+    )
     publish.add_argument("number", type=int, help="Specs issue number")
     publish.add_argument("--primary", type=int, required=True, help="Primary issue number")
     publish.add_argument("--revision", type=int, required=True)

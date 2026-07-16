@@ -61,8 +61,9 @@ def test_plan_contract_previews_and_confirms_remote_specs_mutations():
         "create the `spec` label",
         "create or reuse the Specs issue",
         "link the primary issue",
-        "append up to four document comments",
-        "update the Specs revision index",
+        "create only missing canonical document comments",
+        "edit only changed indexed comments",
+        "write the completed Specs index once",
         "fresh remote-write confirmation",
         "inherited `--auto`",
     ):
