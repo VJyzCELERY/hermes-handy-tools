@@ -6,8 +6,26 @@ import sys
 from . import service
 from .errors import CoordinatorError
 
+OPERATIONS = {
+    "activate",
+    "status",
+    "next",
+    "goal",
+    "dependency",
+    "phase",
+    "review",
+    "question",
+    "complete",
+    "gate",
+    "discovered_work",
+}
+
 
 def _dispatch(operation: str, payload: dict) -> dict:
+    if operation not in OPERATIONS:
+        raise CoordinatorError(
+            "unsupported_operation", f"unsupported operation: {operation}"
+        )
     if operation == "activate":
         return service.activate(payload)
     goal_id = payload["goal_id"]
@@ -30,9 +48,7 @@ def _dispatch(operation: str, payload: dict) -> dict:
         return service.gate(goal_id, payload["name"], payload["value"], revision)
     if operation == "discovered_work":
         return service.discovered_work(goal_id, payload["item"], revision)
-    raise CoordinatorError(
-        "unsupported_operation", f"unsupported operation: {operation}"
-    )
+    raise AssertionError("supported operation was not dispatched")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         result = {"ok": True, **_dispatch(args[0], json.loads(args[1]))}
         print(json.dumps(result, sort_keys=True))
         return 0
-    except (CoordinatorError, KeyError, json.JSONDecodeError) as exc:
+    except (CoordinatorError, KeyError, TypeError, json.JSONDecodeError) as exc:
         error = (
             exc.as_dict()
             if isinstance(exc, CoordinatorError)

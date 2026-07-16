@@ -3,7 +3,15 @@ import copy
 import pytest
 
 from hermes_devlog.errors import CoordinatorError
-from hermes_devlog.service import activate, add_dependency, add_goal, phase, review
+from hermes_devlog.service import (
+    activate,
+    add_dependency,
+    add_goal,
+    complete,
+    gate,
+    phase,
+    review,
+)
 from hermes_devlog.store import StateStore
 
 
@@ -73,3 +81,32 @@ def test_review_drift_is_invalidated_and_phase_requires_owner(tmp_path, monkeypa
         "demo-goal", {"head": "h2", "base": "b1", "diff": "d1", "findings": []}, 2
     )
     assert state["state"]["reviews"][0]["valid"] is False
+
+
+def test_completion_requires_clean_review_children_and_dependencies(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    add_goal("demo-goal", {"id": "child", "title": "Child"}, 1)
+    add_dependency("demo-goal", "child", "demo-goal", 2)
+
+    gate("demo-goal", "final_verification", True, 3)
+    with pytest.raises(CoordinatorError) as error:
+        complete("demo-goal", 4)
+    assert error.value.code == "stale_review"
+
+    review(
+        "demo-goal",
+        {"head": "h", "base": "b", "diff": "d", "findings": ["open"]},
+        4,
+    )
+    with pytest.raises(CoordinatorError) as error:
+        complete("demo-goal", 5)
+    assert error.value.code == "stale_review"
+
+    review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 5)
+    with pytest.raises(CoordinatorError) as error:
+        complete("demo-goal", 6)
+    assert error.value.code == "incomplete_children"
+    assert StateStore.from_goal("demo-goal").read()["completion"]["terminal"] is False

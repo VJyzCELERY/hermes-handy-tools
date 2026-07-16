@@ -12,6 +12,8 @@ from .validation import (
     reject_secrets,
 )
 
+TERMINAL_DISPOSITIONS = {"resolved", "deferred", "excluded"}
+
 
 def _store(goal_id: str) -> StateStore:
     return StateStore.from_goal(goal_id)
@@ -64,11 +66,24 @@ def add_goal(goal_id: str, node: Mapping, revision: int) -> dict:
     """Add a recursively contained goal node."""
     reject_secrets(node)
     data = dict(node)
-    if set(data) - {"id", "title", "parent_id", "repositories", "contract", "policy"}:
+    if set(data) - {
+        "id",
+        "title",
+        "parent_id",
+        "repositories",
+        "contract",
+        "policy",
+        "disposition",
+    }:
         raise CoordinatorError("unknown_field", "unknown goal field")
     child_id = identifier(data.get("id"), "goal.id")
     if not isinstance(data.get("title"), str) or not data["title"]:
         raise CoordinatorError("invalid_title", "goal title must be non-empty")
+    if data.get("disposition", "open") not in {
+        "open",
+        *TERMINAL_DISPOSITIONS,
+    }:
+        raise CoordinatorError("invalid_goal", "unsupported goal disposition")
 
     def change(state):
         nodes = state["goal_graph"]["nodes"]
@@ -88,6 +103,7 @@ def add_goal(goal_id: str, node: Mapping, revision: int) -> dict:
         node_copy = deepcopy(data)
         node_copy["id"] = child_id
         node_copy["parent_id"] = parent_id
+        node_copy.setdefault("disposition", "open")
         nodes[child_id] = node_copy
         return state
 
@@ -204,6 +220,7 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
 
 def review(goal_id: str, data: Mapping, revision: int) -> dict:
     """Record review evidence and invalidate prior bindings on drift."""
+    reject_secrets(data)
     required = {"head", "base", "diff", "findings"}
     if set(data) != required or not all(
         isinstance(data[key], str) for key in required - {"findings"}
@@ -229,6 +246,7 @@ def review(goal_id: str, data: Mapping, revision: int) -> dict:
 
 def question(goal_id: str, data: Mapping, revision: int) -> dict:
     """Record an answer or escalate a worker question."""
+    reject_secrets(data)
     allowed = {"session_id", "question", "answer", "escalate", "reason"}
     if set(data) - allowed or not data.get("session_id") or not data.get("question"):
         raise CoordinatorError(
@@ -268,9 +286,39 @@ def complete(goal_id: str, revision: int) -> dict:
             raise CoordinatorError(
                 "incomplete_gates", "completion gates are not satisfied"
             )
-        if any(not review["valid"] for review in state["reviews"]):
+        reviews = state["reviews"]
+        current_review = reviews[-1] if reviews else None
+        if (
+            current_review is None
+            or not current_review.get("valid")
+            or current_review.get("findings")
+        ):
             raise CoordinatorError(
                 "stale_review", "stale review evidence cannot complete a goal"
+            )
+        nodes = state["goal_graph"]["nodes"]
+        root_id = next(
+            (
+                node_id
+                for node_id, node in nodes.items()
+                if node.get("parent_id") is None
+            ),
+            None,
+        )
+        if root_id is None or any(
+            node.get("disposition") not in TERMINAL_DISPOSITIONS
+            for node_id, node in nodes.items()
+            if node_id != root_id
+        ):
+            raise CoordinatorError(
+                "incomplete_children", "all contained goals must be terminal"
+            )
+        if any(
+            nodes[edge["blocker"]].get("disposition") not in TERMINAL_DISPOSITIONS
+            for edge in state["goal_graph"]["dependencies"]
+        ):
+            raise CoordinatorError(
+                "incomplete_dependencies", "dependency blockers are unresolved"
             )
         state["completion"] = {"ready": True, "terminal": True}
         state["phase"] = "merge_ready"

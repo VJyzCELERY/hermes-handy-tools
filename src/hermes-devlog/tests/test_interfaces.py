@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from hermes_devlog import service
 from hermes_devlog.cli import main
 from hermes_devlog.custom_tool import hermes_devlog
 from hermes_devlog.errors import CoordinatorError
@@ -63,7 +64,8 @@ def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
     assert error.value.code == "incomplete_gates"
     discovered_work("demo", {"id": "bug", "title": "Bug", "disposition": "deferred"}, 3)
     gate("demo", "final_verification", True, 4)
-    result = complete("demo", 5)
+    review("demo", {"head": "h", "base": "b", "diff": "d", "findings": []}, 5)
+    result = complete("demo", 6)
     assert result["state"]["completion"]["terminal"] is True
 
 
@@ -72,7 +74,7 @@ def test_cli_reports_structured_input_errors(tmp_path, monkeypatch, capsys):
     assert main(["unknown", "{}"]) == 1
     result = json.loads(capsys.readouterr().out)
     assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_input"
+    assert result["error"]["code"] == "unsupported_operation"
 
 
 def test_unsupported_state_version_is_not_migrated(tmp_path, monkeypatch):
@@ -165,8 +167,68 @@ def test_custom_tool_returns_structured_failure(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     result = hermes_devlog("status", {"goal_id": "missing"})
     assert result["ok"] is False
-    with pytest.raises(ValueError):
-        hermes_devlog("not-supported", {})
+    assert hermes_devlog("not-supported", {})["error"]["code"] == (
+        "unsupported_operation"
+    )
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["goal", "dependency", "phase", "review", "question", "complete", "gate"],
+)
+def test_cli_and_custom_tool_return_equivalent_malformed_input(
+    operation, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    assert main([operation, json.dumps({"goal_id": "demo"})]) == 1
+    cli_result = json.loads(capsys.readouterr().out)
+    tool_result = hermes_devlog(operation, {"goal_id": "demo"})
+    assert tool_result == cli_result
+
+
+def test_question_and_review_secret_inputs_leave_state_and_activity_unchanged(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    from hermes_devlog.store import StateStore
+
+    store = StateStore.from_goal("demo")
+    before = store.read()
+    activity_before = store.activity_path.read_text()
+    for operation, data in [
+        ("question", {"session_id": "s", "question": "api_token?"}),
+        (
+            "review",
+            {"head": "h", "base": "b", "diff": "d", "findings": [{"token": "x"}]},
+        ),
+    ]:
+        with pytest.raises(CoordinatorError) as error:
+            getattr(service, operation)("demo", data, 1)
+        assert error.value.code in {"secret_field", "secret_value"}
+    assert store.read() == before
+    assert store.activity_path.read_text() == activity_before
+
+
+def test_activity_records_are_timestamped_attributed_and_verified(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    gate("demo", "final_verification", True, 1)
+    from hermes_devlog.store import StateStore
+
+    records = [
+        json.loads(line)
+        for line in StateStore.from_goal("demo").activity_path.read_text().splitlines()
+    ]
+    assert len(records) == 2
+    assert all(
+        set(record) == {"timestamp", "actor", "operation", "revision", "verified"}
+        and record["actor"]
+        and record["verified"] is True
+        for record in records
+    )
 
 
 @pytest.mark.parametrize(

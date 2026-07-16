@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from hermes_devlog.cli import main
 
@@ -25,3 +26,8 @@ def test_activation_persists_pinned_state(tmp_path, monkeypatch, capsys):
     assert result["state"]["revision"] == 1
     assert result["state"]["next_action"] == "begin_issue"
     assert (tmp_path / "dev-log" / "demo-goal" / "config.json").exists()
+
+
+def test_replacement_skill_is_between_three_and_five_kilobytes():
+    skill = Path(__file__).parents[1] / "skills" / "hermes-development-log.md"
+    assert 3072 <= skill.stat().st_size <= 5120

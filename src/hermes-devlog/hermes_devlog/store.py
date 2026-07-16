@@ -5,6 +5,7 @@ import json
 import os
 from collections.abc import Callable
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .errors import CoordinatorError
@@ -81,7 +82,13 @@ class StateStore:
         return state
 
     def mutate(
-        self, revision: int, operation: str, change: Callable[[dict], dict]
+        self,
+        revision: int,
+        operation: str,
+        change: Callable[[dict], dict],
+        *,
+        actor: str = "hermes",
+        verified: bool = True,
     ) -> dict:
         """Apply one revision-checked atomic state mutation."""
         expected = expected_revision(revision)
@@ -97,7 +104,7 @@ class StateStore:
             updated = change(json.loads(json.dumps(state)))
             updated["revision"] = expected + 1
             self._atomic_json(self.state_path, updated)
-            self._activity(operation, updated["revision"])
+            self._activity(operation, updated["revision"], actor, verified)
         return updated
 
     def _atomic_json(self, path: Path, value: dict) -> None:
@@ -105,7 +112,29 @@ class StateStore:
         temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
         temporary.replace(path)
 
-    def _activity(self, operation: str, revision: int) -> None:
-        record = {"revision": revision, "operation": operation}
+    def _activity(
+        self,
+        operation: str,
+        revision: int,
+        actor: str = "hermes",
+        verified: bool = True,
+    ) -> None:
+        record = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "actor": actor,
+            "operation": operation,
+            "revision": revision,
+            "verified": verified,
+        }
+        if (
+            not isinstance(record["timestamp"], str)
+            or not isinstance(actor, str)
+            or not actor
+            or not isinstance(operation, str)
+            or not operation
+            or not isinstance(revision, int)
+            or not isinstance(verified, bool)
+        ):
+            raise CoordinatorError("invalid_activity", "activity record is invalid")
         with self.activity_path.open("a") as handle:
             handle.write(json.dumps(record, sort_keys=True) + "\n")

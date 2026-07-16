@@ -21,6 +21,9 @@ def reject_secrets(value: object, path: str = "input") -> None:
                     "secret_field", f"secret field is not allowed: {path}.{key}"
                 )
             reject_secrets(child, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            reject_secrets(child, f"{path}[{index}]")
     elif isinstance(value, str) and any(word in value.lower() for word in SECRET_WORDS):
         raise CoordinatorError(
             "secret_value", f"secret-looking value is not allowed at {path}"
