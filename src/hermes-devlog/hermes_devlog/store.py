@@ -133,7 +133,9 @@ class StateStore:
 
     def _atomic_json(self, path: Path, value: dict) -> None:
         temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
-        temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+        temporary.write_text(
+            json.dumps(value, allow_nan=False, indent=2, sort_keys=True) + "\n"
+        )
         temporary.replace(path)
 
     def _activity(
@@ -161,4 +163,4 @@ class StateStore:
         ):
             raise CoordinatorError("invalid_activity", "activity record is invalid")
         with self.activity_path.open("a") as handle:
-            handle.write(json.dumps(record, sort_keys=True) + "\n")
+            handle.write(json.dumps(record, allow_nan=False, sort_keys=True) + "\n")

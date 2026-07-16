@@ -2,6 +2,7 @@
 
 import re
 from collections.abc import Mapping
+from math import isfinite
 from pathlib import Path, PurePosixPath
 
 from .errors import CoordinatorError
@@ -19,9 +20,12 @@ SECRET_PATTERNS = (
 PHASES = {
     "issue",
     "plan",
+    "plan_review",
     "implement",
     "implementation_review",
     "remediation",
+    "pr_delivery",
+    "final_verification",
     "merge_ready",
 }
 PHASE_RUN_STATUSES = {"running", "completed", "failed", "cancelled"}
@@ -35,6 +39,7 @@ SENSITIVE_QUESTION_CLASSES = {
     "merge",
 }
 POLICY_FIELDS = {"capacity", "notifications", "merge", "discovered_work"}
+PROFILE_MATCH_RANK = {"native": 0, "adapted": 1, "fallback": 2}
 
 
 def reject_secrets(value: object, path: str = "input") -> None:
@@ -181,9 +186,33 @@ def normalized_policy(value: object) -> dict:
     }
 
 
+def profile_payload(value: object) -> dict:
+    """Validate and return one complete workflow profile."""
+    return _profile(value)
+
+
+def review_identity(value: object, path: str) -> str:
+    """Validate a canonical, non-empty review binding identity."""
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or any(character.isspace() for character in value)
+        or "\x00" in value
+    ):
+        raise CoordinatorError("invalid_review", f"invalid review identity at {path}")
+    return value
+
+
 def json_value(value: object, path: str) -> None:
     """Require a JSON-compatible value for durable evidence fields."""
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if value is None or isinstance(value, (str, int, bool)):
+        return
+    if isinstance(value, float):
+        if not isfinite(value):
+            raise CoordinatorError(
+                "invalid_state", f"{path} contains a non-finite number"
+            )
         return
     if isinstance(value, list):
         for index, child in enumerate(value):
@@ -248,6 +277,7 @@ def _validate_goal_node(node_id: object, value: object) -> None:
             "id",
             "title",
             "parent_id",
+            "profile",
             "repositories",
             "source_bindings",
             "completion_contract",
@@ -257,7 +287,14 @@ def _validate_goal_node(node_id: object, value: object) -> None:
         },
         f"goal_graph.nodes.{node_id}",
     )
-    if not {"id", "title", "parent_id", "disposition", "policy"} <= set(node):
+    if not {
+        "id",
+        "title",
+        "parent_id",
+        "profile",
+        "disposition",
+        "policy",
+    } <= set(node):
         raise CoordinatorError("invalid_state", "goal node schema is incomplete")
     if node.get("id") != node_id or not isinstance(node.get("title"), str):
         raise CoordinatorError(
@@ -271,6 +308,7 @@ def _validate_goal_node(node_id: object, value: object) -> None:
     }:
         raise CoordinatorError("invalid_state", "goal disposition is unsupported")
     _policy(node["policy"])
+    profile_payload(node["profile"])
     if "repositories" in node and (
         not isinstance(node["repositories"], list)
         or not all(isinstance(item, str) for item in node["repositories"])
@@ -406,10 +444,10 @@ def _validate_reviews(value: object) -> None:
         raise CoordinatorError("invalid_state", "reviews must be a list")
     for review in value:
         item = strict_mapping(review, fields, "review")
-        if set(item) != fields or not all(
-            isinstance(item[field], str) for field in ("head", "base", "diff")
-        ):
+        if set(item) != fields:
             raise CoordinatorError("invalid_state", "review binding is invalid")
+        for field in ("head", "base", "diff"):
+            review_identity(item[field], f"review.{field}")
         if not isinstance(item["findings"], list) or not isinstance(
             item["valid"], bool
         ):

@@ -7,6 +7,7 @@ from .errors import CoordinatorError
 from .store import StateStore
 from .validation import (
     PHASE_RUN_STATUSES,
+    PROFILE_MATCH_RANK,
     QUESTION_STATUSES,
     activation_payload,
     expected_revision,
@@ -15,7 +16,9 @@ from .validation import (
     json_value,
     normalized_absolute_path,
     normalized_policy,
+    profile_payload,
     reject_secrets,
+    review_identity,
 )
 
 TERMINAL_DISPOSITIONS = {"resolved", "deferred", "excluded"}
@@ -72,6 +75,7 @@ def activate(payload: Mapping) -> dict:
                     "id": goal_id,
                     "title": data["title"],
                     "parent_id": None,
+                    "profile": deepcopy(data["profile"]),
                     "repositories": deepcopy(data["repositories"]),
                     "source_bindings": deepcopy(data["source_bindings"]),
                     contract_field: deepcopy(data[contract_field]),
@@ -113,6 +117,7 @@ def add_goal(goal_id: str, node: Mapping, revision: int) -> dict:
         "id",
         "title",
         "parent_id",
+        "profile",
         "repositories",
         "source_bindings",
         "completion_contract",
@@ -144,6 +149,8 @@ def add_goal(goal_id: str, node: Mapping, revision: int) -> dict:
                 "invalid_binding", "source_bindings must be non-empty"
             )
         json_value(data["source_bindings"], "goal.source_bindings")
+    if "profile" in data:
+        profile_payload(data["profile"])
     contracts = [
         data[field] for field in ("completion_contract", "contract") if field in data
     ]
@@ -167,6 +174,16 @@ def add_goal(goal_id: str, node: Mapping, revision: int) -> dict:
         parent = nodes[parent_id]
         parent_policy = dict(state.get("policy", {}))
         parent_policy.update(parent.get("policy", {}))
+        parent_profile = parent["profile"]
+        child_profile = profile_payload(data.get("profile", parent_profile))
+        if (
+            PROFILE_MATCH_RANK[child_profile["match"]]
+            < PROFILE_MATCH_RANK[parent_profile["match"]]
+            or not set(child_profile["sources"]).issubset(parent_profile["sources"])
+        ):
+            raise CoordinatorError(
+                "profile_broadening", "child profile cannot broaden parent profile"
+            )
         normalized_child_policy = normalized_policy(child_policy)
         child_policy = {field: normalized_child_policy[field] for field in child_policy}
         for field, child_value in child_policy.items():
@@ -187,6 +204,7 @@ def add_goal(goal_id: str, node: Mapping, revision: int) -> dict:
         effective_policy = dict(parent_policy)
         effective_policy.update(child_policy)
         node_copy["policy"] = effective_policy
+        node_copy["profile"] = child_profile
         nodes[child_id] = node_copy
         state["work_items"][child_id] = {
             "phase": "issue",
@@ -346,9 +364,12 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
     phases = [
         "issue",
         "plan",
+        "plan_review",
         "implement",
         "implementation_review",
         "remediation",
+        "pr_delivery",
+        "final_verification",
         "merge_ready",
     ]
     if data.get("phase") not in phases:
@@ -360,16 +381,38 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
             raise CoordinatorError("missing_work_item", "work item does not exist")
         current = work_item["phase"]
         target = data["phase"]
+        matching_runs = [
+            run
+            for run in state["phase_runs"]
+            if run["session_id"] == data["session_id"]
+            and run["attempt"] == data["attempt"]
+        ]
+        if len(matching_runs) > 1:
+            raise CoordinatorError(
+                "invalid_phase_run", "phase session and attempt are not unique"
+            )
+        matching_run = matching_runs[0] if matching_runs else None
+        config = _store(goal_id).read_config()
+        if (
+            data["model"] != config["route"]["model"]
+            or data["variant"] != config["route"]["variant"]
+        ):
+            raise CoordinatorError(
+                "route_mismatch", "phase run does not use the pinned model route"
+            )
         allowed_targets = {
             "issue": {"issue", "plan"},
-            "plan": {"plan", "implement"},
+            "plan": {"plan", "plan_review"},
+            "plan_review": {"plan_review", "implement"},
             "implement": {"implement", "implementation_review", "remediation"},
             "implementation_review": {
                 "implementation_review",
                 "remediation",
-                "merge_ready",
+                "pr_delivery",
             },
             "remediation": {"remediation", "implement", "implementation_review"},
+            "pr_delivery": {"pr_delivery", "final_verification"},
+            "final_verification": {"final_verification", "merge_ready"},
             "merge_ready": {"merge_ready"},
         }
         if target not in allowed_targets[current]:
@@ -379,7 +422,7 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
         active = sum(
             run.get("status") == "running"
             for run in state["phase_runs"]
-            if isinstance(run, Mapping)
+            if isinstance(run, Mapping) and run is not matching_run
         )
         if phase_status == "running" and active >= state["capacity"]:
             raise CoordinatorError(
@@ -407,13 +450,15 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
         if data["work_item_id"] == goal_id:
             state["phase"] = target
             state["next_action"] = next_action
-        state["phase_runs"].append(
-            {
-                **dict(data),
-                "status": phase_status,
-                "question_status": question_status,
-            }
-        )
+        run = {
+            **dict(data),
+            "status": phase_status,
+            "question_status": question_status,
+        }
+        if matching_run is None:
+            state["phase_runs"].append(run)
+        else:
+            matching_run.update(run)
         return state
 
     return _mutate(goal_id, revision, "phase", change)
@@ -433,6 +478,8 @@ def review(goal_id: str, data: Mapping, revision: int) -> dict:
         )
     if not isinstance(data["findings"], list):
         raise CoordinatorError("invalid_review", "findings must be a list")
+    for field in ("head", "base", "diff"):
+        review_identity(data[field], f"review.{field}")
 
     def change(state):
         for prior in state["reviews"]:
@@ -594,9 +641,26 @@ def complete(goal_id: str, revision: int) -> dict:
     config = store.read_config()
 
     def change(state):
-        if state.get("phase") != "implementation_review":
+        if state.get("phase") != "final_verification":
             raise CoordinatorError(
-                "incomplete_workflow", "completion requires implementation review"
+                "incomplete_workflow", "completion requires final verification"
+            )
+        required_phases = {
+            "plan",
+            "plan_review",
+            "implement",
+            "implementation_review",
+            "pr_delivery",
+            "final_verification",
+        }
+        recorded_phases = {
+            run["phase"]
+            for run in state["phase_runs"]
+            if run["work_item_id"] == goal_id and run["status"] == "completed"
+        }
+        if not required_phases <= recorded_phases:
+            raise CoordinatorError(
+                "incomplete_workflow", "required workflow phase evidence is missing"
             )
         if (
             any(item.get("disposition") == "open" for item in state["discovered_work"])

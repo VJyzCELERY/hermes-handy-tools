@@ -1,5 +1,7 @@
 import copy
 import json
+import os
+from multiprocessing import get_context
 
 import pytest
 
@@ -20,6 +22,16 @@ from hermes_devlog.service import (
 from hermes_devlog.store import StateStore
 
 
+def _race_mutation(home, results):
+    os.environ["HERMES_HOME"] = str(home)
+    try:
+        StateStore.from_goal("demo-goal").set_next_action("race", 1)
+    except CoordinatorError as error:
+        results.put(error.code)
+    else:
+        results.put("ok")
+
+
 def template():
     return {
         "release": "v1.0.0",
@@ -35,7 +47,7 @@ def payload():
         "title": "Demo goal",
         "template": template(),
         "profile": {"name": "native", "match": "native", "sources": []},
-        "route": {"model": "openai/gpt-5.6-luna", "variant": "high"},
+        "route": {"model": "model", "variant": "high"},
         "permissions": {"implement": True, "merge": False},
         "repositories": ["org/demo"],
         "source_bindings": {"issue": "#1", "spec": "#4"},
@@ -187,18 +199,12 @@ def test_completion_requires_clean_review_children_and_dependencies(
         "next_action": "implement",
     }
     phase("demo-goal", phase_data, 3)
-    phase_data["phase"] = "implement"
-    phase_data["next_action"] = "implementation_review"
+    phase_data.update({"phase": "plan_review", "attempt": 2})
     phase("demo-goal", phase_data, 4)
-    phase_data["phase"] = "implementation_review"
-    phase_data["next_action"] = "verify"
+    phase_data.update({"phase": "implement", "attempt": 3})
     phase("demo-goal", phase_data, 5)
-
-    gate("demo-goal", "final_verification", True, 6)
-    with pytest.raises(CoordinatorError) as error:
-        complete("demo-goal", 7)
-    assert error.value.code == "stale_review"
-
+    phase_data.update({"phase": "implementation_review", "attempt": 4})
+    phase("demo-goal", phase_data, 6)
     review(
         "demo-goal",
         {"head": "h", "base": "b", "diff": "d", "findings": ["open"]},
@@ -206,17 +212,20 @@ def test_completion_requires_clean_review_children_and_dependencies(
     )
     with pytest.raises(CoordinatorError) as error:
         complete("demo-goal", 8)
-    assert error.value.code == "stale_review"
+    assert error.value.code == "incomplete_workflow"
 
-    phase_data["phase"] = "remediation"
-    phase_data["next_action"] = "implementation_review"
+    phase_data.update({"phase": "remediation", "attempt": 5})
     phase("demo-goal", phase_data, 8)
-    phase_data["phase"] = "implementation_review"
-    phase_data["next_action"] = "verify"
+    phase_data.update({"phase": "implementation_review", "attempt": 6})
     phase("demo-goal", phase_data, 9)
     review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 10)
+    phase_data.update({"phase": "pr_delivery", "attempt": 7})
+    phase("demo-goal", phase_data, 11)
+    phase_data.update({"phase": "final_verification", "attempt": 8})
+    phase("demo-goal", phase_data, 12)
+    gate("demo-goal", "final_verification", True, 13)
     with pytest.raises(CoordinatorError) as error:
-        complete("demo-goal", 11)
+        complete("demo-goal", 14)
     assert error.value.code == "incomplete_children"
     assert StateStore.from_goal("demo-goal").read()["completion"]["terminal"] is False
 
@@ -271,17 +280,21 @@ def test_merge_permission_gate(tmp_path, monkeypatch):
         "next_action": "implement",
     }
     phase("demo-goal", phase_data, 1)
-    phase_data["phase"] = "implement"
-    phase_data["next_action"] = "implementation_review"
+    phase_data.update({"phase": "plan_review", "attempt": 2})
     phase("demo-goal", phase_data, 2)
-    phase_data["phase"] = "implementation_review"
-    phase_data["next_action"] = "verify"
+    phase_data.update({"phase": "implement", "attempt": 3})
     phase("demo-goal", phase_data, 3)
-    gate("demo-goal", "final_verification", True, 4)
+    phase_data.update({"phase": "implementation_review", "attempt": 4})
+    phase("demo-goal", phase_data, 4)
     review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 5)
+    phase_data.update({"phase": "pr_delivery", "attempt": 5})
+    phase("demo-goal", phase_data, 6)
+    phase_data.update({"phase": "final_verification", "attempt": 6})
+    phase("demo-goal", phase_data, 7)
+    gate("demo-goal", "final_verification", True, 8)
 
     with pytest.raises(CoordinatorError) as error:
-        complete("demo-goal", 6)
+        complete("demo-goal", 9)
 
     assert error.value.code == "merge_not_authorized"
     assert StateStore.from_goal("demo-goal").read()["phase"] != "merge_ready"
@@ -367,7 +380,7 @@ def test_phase_run_identity_is_required_and_persisted(tmp_path, monkeypatch):
         "owner": "planner",
         "work_item_id": "demo-goal",
         "worker_role": "planner",
-        "model": "openai/gpt-5.6-luna",
+        "model": "model",
         "variant": "high",
         "session_id": "s",
         "process_id": "p",
@@ -382,7 +395,7 @@ def test_phase_run_identity_is_required_and_persisted(tmp_path, monkeypatch):
 
     assert result["state"]["phase_runs"][-1]["work_item_id"] == "demo-goal"
     assert result["state"]["phase_runs"][-1]["worker_role"] == "planner"
-    assert result["state"]["phase_runs"][-1]["model"] == "openai/gpt-5.6-luna"
+    assert result["state"]["phase_runs"][-1]["model"] == "model"
     assert result["state"]["phase_runs"][-1]["variant"] == "high"
 
 
@@ -411,15 +424,25 @@ def test_completion_requires_implementation_review_after_remediation(
         "next_action": "implement",
     }
     phase("demo-goal", phase_data, 1)
-    phase_data.update({"phase": "implement", "next_action": "implementation_review"})
+    phase_data.update({"phase": "plan_review", "attempt": 2})
     phase("demo-goal", phase_data, 2)
-    phase_data.update({"phase": "remediation", "next_action": "implementation_review"})
+    phase_data.update({"phase": "implement", "attempt": 3})
     phase("demo-goal", phase_data, 3)
-    gate("demo-goal", "final_verification", True, 4)
-    review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 5)
+    phase_data.update({"phase": "implementation_review", "attempt": 4})
+    phase("demo-goal", phase_data, 4)
+    review(
+        "demo-goal",
+        {"head": "h", "base": "b", "diff": "d", "findings": ["open"]},
+        5,
+    )
+    phase_data.update({"phase": "remediation", "attempt": 5})
+    phase("demo-goal", phase_data, 6)
+    phase_data.update({"phase": "implementation_review", "attempt": 6})
+    phase("demo-goal", phase_data, 7)
+    review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 8)
 
     with pytest.raises(CoordinatorError) as error:
-        complete("demo-goal", 6)
+        complete("demo-goal", 9)
 
     assert error.value.code == "incomplete_workflow"
 
@@ -480,11 +503,12 @@ def test_completion_requires_remediation_after_review_findings(tmp_path, monkeyp
         "next_action": "implement",
     }
     phase("demo-goal", phase_data, 1)
-    phase_data.update({"phase": "implement", "next_action": "review"})
+    phase_data.update({"phase": "plan_review", "attempt": 2})
     phase("demo-goal", phase_data, 2)
-    phase_data.update({"phase": "implementation_review", "next_action": "verify"})
+    phase_data.update({"phase": "implement", "attempt": 3})
     phase("demo-goal", phase_data, 3)
-    gate("demo-goal", "final_verification", True, 4)
+    phase_data.update({"phase": "implementation_review", "attempt": 4})
+    phase("demo-goal", phase_data, 4)
     review(
         "demo-goal",
         {"head": "h", "base": "b", "diff": "d", "findings": ["open"]},
@@ -731,6 +755,181 @@ def test_scheduler_requires_expected_revision(
     assert error.value.code == "revision_conflict"
     assert store.read() == before
     assert store.activity_path.read_text() == activity_before
+
+
+def test_required_workflow_phases_are_enforced(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    data = payload()
+    data["permissions"]["merge"] = True
+    data["policy"] = {"merge": True}
+    activate(data)
+    phase_data = {
+        "phase": "plan",
+        "attempt": 1,
+        "owner": "planner",
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "s",
+        "process_id": "p",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "plan-review",
+    }
+    phase("demo-goal", phase_data, 1)
+    with pytest.raises(CoordinatorError) as error:
+        phase("demo-goal", {**phase_data, "phase": "implement", "attempt": 2}, 2)
+    assert error.value.code == "invalid_transition"
+    for revision, phase_name in enumerate(
+        ("plan_review", "implement", "implementation_review"), start=2
+    ):
+        phase_data = {**phase_data, "phase": phase_name, "attempt": revision}
+        phase("demo-goal", phase_data, revision)
+    review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 5)
+    phase_data = {**phase_data, "phase": "pr_delivery", "attempt": 5}
+    phase("demo-goal", phase_data, 6)
+    phase_data = {**phase_data, "phase": "final_verification", "attempt": 6}
+    phase("demo-goal", phase_data, 7)
+    gate("demo-goal", "final_verification", True, 8)
+    assert complete("demo-goal", 9)["state"]["completion"]["terminal"] is True
+
+
+def test_phase_requires_pinned_route(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    data = {
+        "phase": "plan",
+        "attempt": 1,
+        "owner": "planner",
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "other-model",
+        "variant": "high",
+        "session_id": "s",
+        "process_id": "p",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "plan",
+    }
+    store = StateStore.from_goal("demo-goal")
+    before = store.read()
+    activity_before = store.activity_path.read_text()
+    with pytest.raises(CoordinatorError) as error:
+        phase("demo-goal", data, 1)
+    assert error.value.code == "route_mismatch"
+    assert store.read() == before
+    assert store.activity_path.read_text() == activity_before
+
+
+def test_completed_phase_releases_capacity(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    data = payload()
+    data["policy"] = {"capacity": 1}
+    activate(data)
+    phase_data = {
+        "phase": "plan",
+        "attempt": 1,
+        "owner": "planner",
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "s",
+        "process_id": "p",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "plan",
+        "status": "running",
+    }
+    phase("demo-goal", phase_data, 1)
+    phase("demo-goal", {**phase_data, "status": "completed"}, 2)
+    result = phase(
+        "demo-goal",
+        {**phase_data, "session_id": "s2", "process_id": "p2"},
+        3,
+    )
+    assert sum(run["status"] == "running" for run in result["state"]["phase_runs"]) == 1
+    with pytest.raises(CoordinatorError) as error:
+        question("demo-goal", {"session_id": "s", "question": "which file?"}, 4)
+    assert error.value.code == "invalid_session"
+
+
+def test_empty_review_binding_is_rejected_without_mutation(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    store = StateStore.from_goal("demo-goal")
+    before = store.read()
+    activity_before = store.activity_path.read_text()
+    with pytest.raises(CoordinatorError) as error:
+        review("demo-goal", {"head": "", "base": "b", "diff": "d", "findings": []}, 1)
+    assert error.value.code == "invalid_review"
+    assert store.read() == before
+    assert store.activity_path.read_text() == activity_before
+
+
+def test_child_profile_inherits_and_only_narrows(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    inherited = add_goal("demo-goal", {"id": "inherited", "title": "Inherited"}, 1)
+    assert (
+        inherited["state"]["goal_graph"]["nodes"]["inherited"]["profile"]
+        == payload()["profile"]
+    )
+    narrowed = add_goal(
+        "demo-goal",
+        {
+            "id": "narrowed",
+            "title": "Narrowed",
+            "profile": {"name": "fallback", "match": "fallback", "sources": []},
+        },
+        2,
+    )
+    assert (
+        narrowed["state"]["goal_graph"]["nodes"]["narrowed"]["profile"]["match"]
+        == "fallback"
+    )
+    with pytest.raises(CoordinatorError) as error:
+        add_goal(
+            "demo-goal",
+            {
+                "id": "broadened",
+                "title": "Broadened",
+                "parent_id": "narrowed",
+                "profile": {"name": "native", "match": "native", "sources": []},
+            },
+            3,
+        )
+    assert error.value.code == "profile_broadening"
+
+
+def test_concurrent_mutation_allows_one_revision_winner(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    context = get_context("fork")
+    results = context.Queue()
+    processes = [
+        context.Process(target=_race_mutation, args=(tmp_path, results))
+        for _ in range(2)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join()
+    outcomes = [results.get(timeout=2) for _ in processes]
+    assert sorted(outcomes) == ["ok", "revision_conflict"]
+    state = StateStore.from_goal("demo-goal").read()
+    assert state["revision"] == 2
+    assert (
+        len(StateStore.from_goal("demo-goal").activity_path.read_text().splitlines())
+        == 2
+    )
 
 
 def test_store_rejects_malformed_config(tmp_path, monkeypatch):

@@ -1,5 +1,6 @@
 import copy
 import json
+import math
 
 import pytest
 
@@ -108,18 +109,22 @@ def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
         "next_action": "implement",
     }
     phase("demo", phase_data, 1)
-    phase_data["phase"] = "implement"
-    phase_data["next_action"] = "implementation_review"
+    phase_data.update({"phase": "plan_review", "attempt": 2})
     phase("demo", phase_data, 2)
-    phase_data["phase"] = "implementation_review"
+    phase_data.update({"phase": "implement", "attempt": 3})
+    phase_data["next_action"] = "implementation_review"
+    phase("demo", phase_data, 3)
+    phase_data.update({"phase": "implementation_review", "attempt": 4})
     phase_data["next_action"] = "verify"
     phase_data["status"] = "running"
-    phase("demo", phase_data, 3)
-    question("demo", {"session_id": "s", "question": "scope?"}, 4)
-    discovered_work("demo", {"id": "bug", "title": "Bug"}, 5)
+    phase("demo", phase_data, 4)
+    question("demo", {"session_id": "s", "question": "scope?"}, 5)
+    phase_data["status"] = "completed"
+    phase("demo", phase_data, 6)
+    discovered_work("demo", {"id": "bug", "title": "Bug"}, 7)
     with pytest.raises(CoordinatorError) as error:
-        complete("demo", 6)
-    assert error.value.code == "incomplete_gates"
+        complete("demo", 8)
+    assert error.value.code == "incomplete_workflow"
     discovered_work(
         "demo",
         {
@@ -128,11 +133,15 @@ def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
             "disposition": "deferred",
             "outcome": "deferred to follow-up",
         },
-        6,
+        8,
     )
-    gate("demo", "final_verification", True, 7)
-    review("demo", {"head": "h", "base": "b", "diff": "d", "findings": []}, 8)
-    result = complete("demo", 9)
+    review("demo", {"head": "h", "base": "b", "diff": "d", "findings": []}, 9)
+    phase_data.update({"phase": "pr_delivery", "attempt": 5, "status": "completed"})
+    phase("demo", phase_data, 10)
+    phase_data.update({"phase": "final_verification", "attempt": 6})
+    phase("demo", phase_data, 11)
+    gate("demo", "final_verification", True, 12)
+    result = complete("demo", 13)
     assert result["state"]["completion"]["terminal"] is True
 
 
@@ -437,17 +446,19 @@ def test_service_rejects_invalid_graphs_and_records_workflow(tmp_path, monkeypat
         "next_action": "plan",
     }
     phase("demo", phase_data, 3)
-    phase_data["phase"] = "implement"
+    phase_data.update({"phase": "plan_review", "attempt": 2})
+    phase("demo", phase_data, 4)
+    phase_data.update({"phase": "implement", "attempt": 3})
     phase_data["next_action"] = "implement"
     phase_data["status"] = "running"
-    phase("demo", phase_data, 4)
+    phase("demo", phase_data, 5)
     with pytest.raises(CoordinatorError):
-        phase("demo", {"phase": "issue", "owner": "builder"}, 5)
-    review("demo", {"head": "h", "base": "b", "diff": "d", "findings": ["one"]}, 5)
+        phase("demo", {"phase": "issue", "owner": "builder"}, 6)
+    review("demo", {"head": "h", "base": "b", "diff": "d", "findings": ["one"]}, 6)
     question(
         "demo",
         {"session_id": "s", "question": "which file?", "answer": "the package"},
-        6,
+        7,
     )
     assert Checkpoint(Phase.PLAN, "plan").next_action == "plan"
     assert ReviewBinding("h", "b", "d").head == "h"
@@ -659,6 +670,13 @@ def test_validation_rejects_invalid_identifiers(value):
 def test_validation_rejects_invalid_evidence_values():
     with pytest.raises(CoordinatorError) as error:
         json_value(object(), "evidence")
+    assert error.value.code == "invalid_state"
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_non_finite_evidence_rejected(value):
+    with pytest.raises(CoordinatorError) as error:
+        json_value(value, "evidence")
     assert error.value.code == "invalid_state"
     with pytest.raises(CoordinatorError) as error:
         json_value({1: "value"}, "evidence")
