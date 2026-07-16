@@ -166,7 +166,9 @@ def _route(value: object) -> dict:
 def _policy(value: object) -> dict:
     policy = strict_mapping(value, POLICY_FIELDS, "policy")
     if "capacity" in policy and (
-        not isinstance(policy["capacity"], int) or policy["capacity"] < 1
+        not isinstance(policy["capacity"], int)
+        or isinstance(policy["capacity"], bool)
+        or policy["capacity"] < 1
     ):
         raise CoordinatorError("invalid_policy", "capacity must be a positive integer")
     for field in POLICY_FIELDS - {"capacity"}:
@@ -593,7 +595,11 @@ def validate_state(state: object) -> dict:
         raise CoordinatorError("invalid_state", "state phase is unsupported")
     if not isinstance(data.get("next_action"), str) or not data["next_action"]:
         raise CoordinatorError("invalid_state", "state next_action must be non-empty")
-    if not isinstance(data.get("capacity"), int) or data["capacity"] < 1:
+    if (
+        not isinstance(data.get("capacity"), int)
+        or isinstance(data["capacity"], bool)
+        or data["capacity"] < 1
+    ):
         raise CoordinatorError("invalid_state", "state capacity must be positive")
     policy = normalized_policy(data.get("policy"))
     if set(data["policy"]) != POLICY_FIELDS or data["capacity"] != policy["capacity"]:

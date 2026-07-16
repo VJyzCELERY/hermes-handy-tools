@@ -89,6 +89,28 @@ def test_invalid_activation_does_not_create_state(tmp_path, monkeypatch):
     assert not (tmp_path / "dev-log" / "demo-goal").exists()
 
 
+def test_failed_activation_write_rolls_back(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    store = StateStore.from_goal("demo-goal")
+    original_atomic_json = StateStore._atomic_json
+    failed = False
+
+    def fail_state_write(self, path, value):
+        nonlocal failed
+        if path == self.state_path and not failed:
+            failed = True
+            raise OSError("injected state write failure")
+        return original_atomic_json(self, path, value)
+
+    monkeypatch.setattr(StateStore, "_atomic_json", fail_state_write)
+    with pytest.raises(OSError):
+        activate(payload())
+
+    assert not store.config_path.exists()
+    assert not store.state_path.exists()
+    assert activate(payload())["state"]["revision"] == 1
+
+
 def test_stale_revision_is_rejected_without_overwriting(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     result = activate(payload())
@@ -233,7 +255,7 @@ def test_completion_requires_clean_review_children_and_dependencies(
 def test_completion_requires_implementation_review_phase(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(payload())
-    gate("demo-goal", "final_verification", True, 1)
+    gate("demo-goal", "final_verification", False, 1)
     review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 2)
     with pytest.raises(CoordinatorError) as error:
         complete("demo-goal", 3)
@@ -478,6 +500,95 @@ def test_active_phase_runs_respect_capacity(tmp_path, monkeypatch):
 
     assert error.value.code == "capacity_exceeded"
     assert StateStore.from_goal("demo-goal").read() == before
+
+
+def test_active_phase_runs_block_same_work_item_advance(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    running_phase("demo-goal")
+
+    with pytest.raises(CoordinatorError) as error:
+        phase(
+            "demo-goal",
+            {
+                "phase": "plan",
+                "attempt": 2,
+                "owner": "planner",
+                "work_item_id": "demo-goal",
+                "worker_role": "planner",
+                "model": "model",
+                "variant": "high",
+                "session_id": "s2",
+                "process_id": "p2",
+                "command": "plan",
+                "worktree": "/worktree",
+                "expected_evidence": "plan",
+                "observed_evidence": "plan",
+                "next_action": "plan",
+            },
+            2,
+        )
+
+    assert error.value.code == "active_phase_run"
+
+
+def test_active_phase_runs_block_completion(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    data = payload()
+    data["permissions"]["merge"] = True
+    data["policy"] = {"merge": True}
+    activate(data)
+    add_goal("demo-goal", {"id": "child", "title": "Child"}, 1)
+    set_goal_disposition("demo-goal", "child", "resolved", 2)
+
+    phase_data = {
+        "phase": "plan",
+        "attempt": 1,
+        "owner": "planner",
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "root-session",
+        "process_id": "root-process",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "continue",
+    }
+    for revision, phase_name in enumerate(
+        ("plan", "plan_review", "implement", "implementation_review"),
+        start=3,
+    ):
+        phase_data.update({"phase": phase_name, "attempt": revision - 2})
+        phase("demo-goal", phase_data, revision)
+    review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 7)
+    phase_data.update({"phase": "pr_delivery", "attempt": 5})
+    phase("demo-goal", phase_data, 8)
+    phase_data.update({"phase": "final_verification", "attempt": 6})
+    phase("demo-goal", phase_data, 9)
+    gate("demo-goal", "final_verification", True, 10)
+
+    phase(
+        "demo-goal",
+        {
+            **phase_data,
+            "phase": "plan",
+            "attempt": 1,
+            "work_item_id": "child",
+            "session_id": "child-session",
+            "process_id": "child-process",
+            "status": "running",
+        },
+        11,
+    )
+
+    with pytest.raises(CoordinatorError) as error:
+        complete("demo-goal", 12)
+
+    assert error.value.code == "active_phase_run"
+    assert StateStore.from_goal("demo-goal").read()["completion"]["ready"] is False
 
 
 def test_completion_requires_remediation_after_review_findings(tmp_path, monkeypatch):

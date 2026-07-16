@@ -90,9 +90,17 @@ class StateStore:
         with self.locked():
             if self.state_path.exists() or self.config_path.exists():
                 raise CoordinatorError("already_exists", "goal already exists")
-            self._atomic_json(self.config_path, config)
-            self._atomic_json(self.state_path, state)
-            self._activity("activate", 1)
+            try:
+                self._atomic_json(self.config_path, config)
+                self._atomic_json(self.state_path, state)
+                self._activity("activate", 1)
+            except Exception:
+                for path in (self.config_path, self.state_path):
+                    path.unlink(missing_ok=True)
+                    path.with_name(f".{path.name}.tmp-{os.getpid()}").unlink(
+                        missing_ok=True
+                    )
+                raise
         return state
 
     def mutate(

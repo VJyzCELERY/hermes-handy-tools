@@ -428,6 +428,16 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
             raise CoordinatorError(
                 "capacity_exceeded", "active phase capacity has been reached"
             )
+        if any(
+            run.get("status") == "running"
+            and run.get("work_item_id") == data["work_item_id"]
+            and run is not matching_run
+            for run in state["phase_runs"]
+            if isinstance(run, Mapping)
+        ):
+            raise CoordinatorError(
+                "active_phase_run", "work item has an active phase run"
+            )
         if target == "merge_ready" and not state["completion"].get("ready"):
             raise CoordinatorError(
                 "incomplete_gates", "merge-ready requires completed gates"
@@ -437,6 +447,7 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
                 "invalid_transition", "terminal workflow phase cannot move"
             )
         if target in {"implement", "remediation"}:
+            state["gates"]["final_verification"] = False
             for item in state["reviews"]:
                 item["valid"] = False
             if state["completion"]["review_remediation_required"]:
@@ -645,6 +656,14 @@ def complete(goal_id: str, revision: int) -> dict:
             raise CoordinatorError(
                 "incomplete_workflow", "completion requires final verification"
             )
+        if any(
+            run.get("status") == "running"
+            for run in state["phase_runs"]
+            if isinstance(run, Mapping)
+        ):
+            raise CoordinatorError(
+                "active_phase_run", "completion requires all phase runs to finish"
+            )
         required_phases = {
             "plan",
             "plan_review",
@@ -749,6 +768,15 @@ def gate(goal_id: str, name: str, value: object, revision: int) -> dict:
         integration = None if value is True else integration_gate(value)
 
     def change(state):
+        if (
+            name == "final_verification"
+            and value
+            and state.get("phase") != "final_verification"
+        ):
+            raise CoordinatorError(
+                "invalid_gate",
+                "final verification is only valid in final verification phase",
+            )
         if name == "integration":
             if value is True:
                 state["gates"][name] = []

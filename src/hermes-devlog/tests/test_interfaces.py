@@ -155,6 +155,32 @@ def test_final_verification_false_is_persisted(tmp_path, monkeypatch):
     assert result["state"]["revision"] == 2
 
 
+def test_final_verification_gate_requires_current_phase(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+
+    with pytest.raises(CoordinatorError) as error:
+        gate("demo", "final_verification", True, 1)
+
+    assert error.value.code == "invalid_gate"
+
+
+def test_boolean_capacity_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    invalid = activation()
+    invalid["policy"] = {"capacity": True}
+
+    with pytest.raises(CoordinatorError) as error:
+        activate(invalid)
+    assert error.value.code == "invalid_policy"
+
+    state = activate(activation())["state"]
+    state["capacity"] = True
+    with pytest.raises(CoordinatorError) as error:
+        validate_state(state)
+    assert error.value.code == "invalid_state"
+
+
 def test_question_class_cannot_bypass_sensitive_escalation(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(activation())
@@ -484,7 +510,7 @@ def test_cli_dispatches_read_and_mutating_operations(tmp_path, monkeypatch, caps
             {
                 "goal_id": "demo",
                 "name": "final_verification",
-                "value": True,
+                "value": False,
                 "expected_revision": 2,
             },
         ),
@@ -547,7 +573,7 @@ def test_activity_records_are_timestamped_attributed_and_verified(
 ):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(activation())
-    gate("demo", "final_verification", True, 1)
+    gate("demo", "final_verification", False, 1)
     from hermes_devlog.store import StateStore
 
     records = [
