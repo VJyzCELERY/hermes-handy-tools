@@ -52,6 +52,30 @@ def activation(goal_id="demo", *, merge=False):
     }
 
 
+def running_phase(goal_id="demo", revision=1):
+    phase(
+        goal_id,
+        {
+            "phase": "plan",
+            "owner": "planner",
+            "attempt": 1,
+            "work_item_id": goal_id,
+            "worker_role": "planner",
+            "model": "model",
+            "variant": "high",
+            "session_id": "s",
+            "process_id": "p",
+            "command": "plan",
+            "worktree": "/worktree",
+            "expected_evidence": "plan",
+            "observed_evidence": "plan",
+            "next_action": "plan",
+            "status": "running",
+        },
+        revision,
+    )
+
+
 def test_cli_and_custom_tool_have_equivalent_activation(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     payload = activation("cli-goal")
@@ -89,6 +113,7 @@ def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
     phase("demo", phase_data, 2)
     phase_data["phase"] = "implementation_review"
     phase_data["next_action"] = "verify"
+    phase_data["status"] = "running"
     phase("demo", phase_data, 3)
     question("demo", {"session_id": "s", "question": "scope?"}, 4)
     discovered_work("demo", {"id": "bug", "title": "Bug"}, 5)
@@ -111,9 +136,20 @@ def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
     assert result["state"]["completion"]["terminal"] is True
 
 
+def test_final_verification_false_is_persisted(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+
+    result = gate("demo", "final_verification", False, 1)
+
+    assert result["state"]["gates"]["final_verification"] is False
+    assert result["state"]["revision"] == 2
+
+
 def test_question_class_cannot_bypass_sensitive_escalation(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(activation())
+    running_phase()
 
     result = question(
         "demo",
@@ -123,7 +159,7 @@ def test_question_class_cannot_bypass_sensitive_escalation(tmp_path, monkeypatch
             "question_class": "general",
             "answer": "yes",
         },
-        1,
+        2,
     )
 
     item = result["state"]["questions"][-1]
@@ -157,9 +193,7 @@ def test_persisted_dependency_cycle_is_rejected(tmp_path, monkeypatch):
 
     path = StateStore.from_goal("demo").state_path
     state = json.loads(path.read_text())
-    state["goal_graph"]["dependencies"].append(
-        {"blocker": "child", "blocked": "demo"}
-    )
+    state["goal_graph"]["dependencies"].append({"blocker": "child", "blocked": "demo"})
     path.write_text(json.dumps(state))
 
     result = hermes_devlog("status", {"goal_id": "demo"})
@@ -277,12 +311,15 @@ def test_next_does_not_mutate_without_expected_revision(tmp_path, monkeypatch):
 def test_cli_rejects_malformed_nested_phase_payload(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
-    assert main(
-        [
-            "phase",
-            json.dumps({"goal_id": "demo", "data": [], "expected_revision": 1}),
-        ]
-    ) == 1
+    assert (
+        main(
+            [
+                "phase",
+                json.dumps({"goal_id": "demo", "data": [], "expected_revision": 1}),
+            ]
+        )
+        == 1
+    )
 
     result = json.loads(capsys.readouterr().err)
     assert result["ok"] is False
@@ -402,6 +439,7 @@ def test_service_rejects_invalid_graphs_and_records_workflow(tmp_path, monkeypat
     phase("demo", phase_data, 3)
     phase_data["phase"] = "implement"
     phase_data["next_action"] = "implement"
+    phase_data["status"] = "running"
     phase("demo", phase_data, 4)
     with pytest.raises(CoordinatorError):
         phase("demo", {"phase": "issue", "owner": "builder"}, 5)
@@ -568,6 +606,7 @@ def test_github_token_is_rejected_without_mutation(tmp_path, monkeypatch):
 def test_scope_questions_require_user(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(activation())
+    running_phase()
 
     result = question(
         "demo",
@@ -577,7 +616,7 @@ def test_scope_questions_require_user(tmp_path, monkeypatch):
             "question_class": "general",
             "answer": "yes",
         },
-        1,
+        2,
     )
 
     item = result["state"]["questions"][-1]
@@ -675,9 +714,12 @@ def test_activation_rejects_malformed_bindings(field, value):
 
 
 def test_integration_gate_accepts_json_evidence():
-    assert integration_gate(
-        {"id": "gate", "status": "resolved", "evidence": ["verified"]}
-    )["status"] == "resolved"
+    assert (
+        integration_gate(
+            {"id": "gate", "status": "resolved", "evidence": ["verified"]}
+        )["status"]
+        == "resolved"
+    )
 
 
 @pytest.mark.parametrize(
@@ -693,15 +735,9 @@ def test_integration_gate_accepts_json_evidence():
         lambda state: state["goal_graph"].update(nodes={}),
         lambda state: state["goal_graph"]["nodes"]["demo"].pop("policy"),
         lambda state: state["goal_graph"]["nodes"]["demo"].update(title=1),
-        lambda state: state["goal_graph"]["nodes"]["demo"].update(
-            disposition="bad"
-        ),
-        lambda state: state["goal_graph"]["nodes"]["demo"].update(
-            repositories=[1]
-        ),
-        lambda state: state["goal_graph"]["nodes"]["demo"].update(
-            source_bindings={}
-        ),
+        lambda state: state["goal_graph"]["nodes"]["demo"].update(disposition="bad"),
+        lambda state: state["goal_graph"]["nodes"]["demo"].update(repositories=[1]),
+        lambda state: state["goal_graph"]["nodes"]["demo"].update(source_bindings={}),
         lambda state: state["goal_graph"]["nodes"]["demo"].update(contract=[]),
         lambda state: state["goal_graph"].update(dependencies={}),
         lambda state: state["goal_graph"]["dependencies"].append(

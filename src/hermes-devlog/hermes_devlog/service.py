@@ -80,7 +80,7 @@ def activate(payload: Mapping) -> dict:
             },
             "dependencies": [],
         },
-        "work_items": {},
+        "work_items": {goal_id: {"phase": "issue", "next_action": "begin_issue"}},
         "phase_runs": [],
         "reviews": [],
         "questions": [],
@@ -135,9 +135,10 @@ def add_goal(goal_id: str, node: Mapping, revision: int) -> dict:
     ):
         raise CoordinatorError("invalid_repositories", "goal repositories are invalid")
     if "source_bindings" in data:
-        if not isinstance(data["source_bindings"], (Mapping, list)) or not data[
-            "source_bindings"
-        ]:
+        if (
+            not isinstance(data["source_bindings"], (Mapping, list))
+            or not data["source_bindings"]
+        ):
             raise CoordinatorError(
                 "invalid_binding", "source_bindings must be non-empty"
             )
@@ -146,9 +147,7 @@ def add_goal(goal_id: str, node: Mapping, revision: int) -> dict:
         data[field] for field in ("completion_contract", "contract") if field in data
     ]
     if contracts and (
-        len(contracts) != 1
-        or not isinstance(contracts[0], Mapping)
-        or not contracts[0]
+        len(contracts) != 1 or not isinstance(contracts[0], Mapping) or not contracts[0]
     ):
         raise CoordinatorError(
             "invalid_binding", "one non-empty completion contract is required"
@@ -168,9 +167,7 @@ def add_goal(goal_id: str, node: Mapping, revision: int) -> dict:
         parent_policy = dict(state.get("policy", {}))
         parent_policy.update(parent.get("policy", {}))
         normalized_child_policy = normalized_policy(child_policy)
-        child_policy = {
-            field: normalized_child_policy[field] for field in child_policy
-        }
+        child_policy = {field: normalized_child_policy[field] for field in child_policy}
         for field, child_value in child_policy.items():
             parent_value = parent_policy.get(field, normalized_policy({})[field])
             if field == "capacity" and child_value > parent_value:
@@ -190,6 +187,10 @@ def add_goal(goal_id: str, node: Mapping, revision: int) -> dict:
         effective_policy.update(child_policy)
         node_copy["policy"] = effective_policy
         nodes[child_id] = node_copy
+        state["work_items"][child_id] = {
+            "phase": "issue",
+            "next_action": f"begin_child:{child_id}",
+        }
         return state
 
     return _mutate(goal_id, revision, "add_goal", change)
@@ -331,6 +332,7 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
             )
     json_value(data["expected_evidence"], "phase.expected_evidence")
     json_value(data["observed_evidence"], "phase.observed_evidence")
+    identifier(data["work_item_id"], "phase.work_item_id")
     phase_status = data.get("status", "completed")
     if not isinstance(phase_status, str) or phase_status not in PHASE_RUN_STATUSES:
         raise CoordinatorError("invalid_phase_run", "unsupported phase run status")
@@ -351,7 +353,10 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
         raise CoordinatorError("invalid_transition", "unsupported workflow phase")
 
     def change(state):
-        current = state["phase"]
+        work_item = state["work_items"].get(data["work_item_id"])
+        if work_item is None:
+            raise CoordinatorError("missing_work_item", "work item does not exist")
+        current = work_item["phase"]
         target = data["phase"]
         allowed_targets = {
             "issue": {"issue", "plan"},
@@ -374,10 +379,7 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
             for run in state["phase_runs"]
             if isinstance(run, Mapping)
         )
-        if (
-            phase_status == "running"
-            and active >= state["capacity"]
-        ):
+        if phase_status == "running" and active >= state["capacity"]:
             raise CoordinatorError(
                 "capacity_exceeded", "active phase capacity has been reached"
             )
@@ -398,8 +400,11 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
         elif target == "implementation_review":
             if state["completion"]["review_boundary_required"]:
                 state["completion"]["review_boundary_required"] = False
-        state["phase"] = target
-        state["next_action"] = data.get("next_action", f"continue_{target}")
+        next_action = data.get("next_action", f"continue_{target}")
+        work_item.update({"phase": target, "next_action": next_action})
+        if data["work_item_id"] == goal_id:
+            state["phase"] = target
+            state["next_action"] = next_action
         state["phase_runs"].append(
             {
                 **dict(data),
@@ -429,8 +434,8 @@ def review(goal_id: str, data: Mapping, revision: int) -> dict:
 
     def change(state):
         for prior in state["reviews"]:
-            if prior["head"] != data["head"] or all(
-                prior[key] == data[key] for key in ("base", "diff")
+            if prior["head"] != data["head"] or (
+                prior["base"] == data["base"] and prior["diff"] != data["diff"]
             ):
                 prior["valid"] = False
         state["reviews"].append(
@@ -484,6 +489,15 @@ def question(goal_id: str, data: Mapping, revision: int) -> dict:
         question_class = inferred_class
 
     def change(state):
+        matching_runs = [
+            run
+            for run in state["phase_runs"]
+            if run["session_id"] == data["session_id"] and run["status"] == "running"
+        ]
+        if len(matching_runs) != 1:
+            raise CoordinatorError(
+                "invalid_session", "question session must have exactly one running run"
+            )
         sensitive = question_class in SENSITIVE_QUESTION_CLASSES
         escalated = sensitive or bool(data.get("escalate")) or not data.get("answer")
         item = {
@@ -493,10 +507,7 @@ def question(goal_id: str, data: Mapping, revision: int) -> dict:
         }
         state["questions"].append(item)
         for run in state["phase_runs"]:
-            if (
-                run["session_id"] == data["session_id"]
-                and run["status"] == "running"
-            ):
+            if run["session_id"] == data["session_id"] and run["status"] == "running":
                 run["question_status"] = item["status"]
         state["next_action"] = "needs_user" if escalated else "resume_session"
         return state
@@ -530,17 +541,14 @@ def _scheduled_action(state: Mapping) -> str:
     if state.get("completion", {}).get("terminal"):
         return "merge_if_authorized"
     if any(
-        item.get("disposition") == "open"
-        for item in state.get("discovered_work", [])
+        item.get("disposition") == "open" for item in state.get("discovered_work", [])
     ):
         return "dispose_discovered_work"
     if state.get("gates", {}).get("integration"):
         return "resolve_integration_gates"
     runs = state.get("phase_runs", [])
     active = sum(
-        run.get("status") == "running"
-        for run in runs
-        if isinstance(run, Mapping)
+        run.get("status") == "running" for run in runs if isinstance(run, Mapping)
     )
     capacity = state.get("capacity", state.get("policy", {}).get("capacity", 1))
     if active >= capacity:
@@ -562,7 +570,11 @@ def _scheduled_action(state: Mapping) -> str:
         and node_id not in blocked
     )
     if ready:
-        return f"begin_child:{ready[0]}"
+        return (
+            state.get("work_items", {})
+            .get(ready[0], {})
+            .get("next_action", f"begin_child:{ready[0]}")
+        )
     return state.get("next_action", "begin_issue")
 
 
@@ -585,10 +597,7 @@ def complete(goal_id: str, revision: int) -> dict:
                 "incomplete_workflow", "completion requires implementation review"
             )
         if (
-            any(
-                item.get("disposition") == "open"
-                for item in state["discovered_work"]
-            )
+            any(item.get("disposition") == "open" for item in state["discovered_work"])
             or state["gates"]["integration"]
             or not state["gates"]["final_verification"]
         ):
@@ -599,12 +608,10 @@ def complete(goal_id: str, revision: int) -> dict:
         current_head = reviews[-1]["head"] if reviews else None
         current_bindings = {}
         for item in reviews:
-            if item["head"] == current_head:
+            if item["head"] == current_head and item.get("valid"):
                 current_bindings[(item["base"], item["diff"])] = item
         if not current_bindings or any(
-            not item.get("valid")
-            or item.get("findings")
-            or item.get("phase") != "implementation_review"
+            item.get("findings") or item.get("phase") != "implementation_review"
             for item in current_bindings.values()
         ):
             raise CoordinatorError(
@@ -668,7 +675,12 @@ def gate(goal_id: str, name: str, value: object, revision: int) -> dict:
     reject_secrets(value)
     if name not in {"final_verification", "integration"}:
         raise CoordinatorError("invalid_gate", "unsupported completion gate")
-    integration = None if value is True else integration_gate(value)
+    if name == "final_verification":
+        if not isinstance(value, bool):
+            raise CoordinatorError("invalid_gate", "final verification must be boolean")
+        integration = None
+    else:
+        integration = None if value is True else integration_gate(value)
 
     def change(state):
         if name == "integration":
@@ -687,10 +699,6 @@ def gate(goal_id: str, name: str, value: object, revision: int) -> dict:
                     if item["id"] != integration["id"]
                 ] + [integration]
         else:
-            if not isinstance(value, bool):
-                raise CoordinatorError(
-                    "invalid_gate", "final verification must be boolean"
-                )
             state["gates"][name] = value
         return state
 
