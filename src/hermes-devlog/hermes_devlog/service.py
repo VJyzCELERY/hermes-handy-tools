@@ -6,6 +6,8 @@ from copy import deepcopy
 from .errors import CoordinatorError
 from .store import StateStore
 from .validation import (
+    PHASE_RUN_STATUSES,
+    QUESTION_STATUSES,
     activation_payload,
     expected_revision,
     identifier,
@@ -25,6 +27,7 @@ QUESTION_CLASSES = {
     "merge",
 }
 SENSITIVE_QUESTION_CLASSES = {
+    "scope",
     "credentials",
     "policy",
     "external_approval",
@@ -110,6 +113,8 @@ def add_goal(goal_id: str, node: Mapping, revision: int) -> dict:
         "title",
         "parent_id",
         "repositories",
+        "source_bindings",
+        "completion_contract",
         "contract",
         "policy",
         "disposition",
@@ -123,6 +128,33 @@ def add_goal(goal_id: str, node: Mapping, revision: int) -> dict:
         *TERMINAL_DISPOSITIONS,
     }:
         raise CoordinatorError("invalid_goal", "unsupported goal disposition")
+    if "repositories" in data and (
+        not isinstance(data["repositories"], list)
+        or not data["repositories"]
+        or not all(isinstance(item, str) and item for item in data["repositories"])
+    ):
+        raise CoordinatorError("invalid_repositories", "goal repositories are invalid")
+    if "source_bindings" in data:
+        if not isinstance(data["source_bindings"], (Mapping, list)) or not data[
+            "source_bindings"
+        ]:
+            raise CoordinatorError(
+                "invalid_binding", "source_bindings must be non-empty"
+            )
+        json_value(data["source_bindings"], "goal.source_bindings")
+    contracts = [
+        data[field] for field in ("completion_contract", "contract") if field in data
+    ]
+    if contracts and (
+        len(contracts) != 1
+        or not isinstance(contracts[0], Mapping)
+        or not contracts[0]
+    ):
+        raise CoordinatorError(
+            "invalid_binding", "one non-empty completion contract is required"
+        )
+    if contracts:
+        json_value(contracts[0], "goal.completion_contract")
 
     def change(state):
         nodes = state["goal_graph"]["nodes"]
@@ -253,6 +285,7 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
         "observed_evidence",
         "next_action",
         "status",
+        "question_status",
     }
     if set(data) - allowed:
         raise CoordinatorError("unknown_field", "unknown phase field")
@@ -298,6 +331,14 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
             )
     json_value(data["expected_evidence"], "phase.expected_evidence")
     json_value(data["observed_evidence"], "phase.observed_evidence")
+    phase_status = data.get("status", "completed")
+    if not isinstance(phase_status, str) or phase_status not in PHASE_RUN_STATUSES:
+        raise CoordinatorError("invalid_phase_run", "unsupported phase run status")
+    question_status = data.get("question_status", "none")
+    if not isinstance(question_status, str) or question_status not in QUESTION_STATUSES:
+        raise CoordinatorError(
+            "invalid_phase_run", "unsupported phase run question status"
+        )
     phases = [
         "issue",
         "plan",
@@ -329,12 +370,12 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
                 "invalid_transition", f"cannot move from {current} to {target}"
             )
         active = sum(
-            run.get("status") in {"running", "active", "in_progress"}
+            run.get("status") == "running"
             for run in state["phase_runs"]
             if isinstance(run, Mapping)
         )
         if (
-            data.get("status") in {"running", "active", "in_progress"}
+            phase_status == "running"
             and active >= state["capacity"]
         ):
             raise CoordinatorError(
@@ -359,7 +400,13 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
                 state["completion"]["review_boundary_required"] = False
         state["phase"] = target
         state["next_action"] = data.get("next_action", f"continue_{target}")
-        state["phase_runs"].append(dict(data))
+        state["phase_runs"].append(
+            {
+                **dict(data),
+                "status": phase_status,
+                "question_status": question_status,
+            }
+        )
         return state
 
     return _mutate(goal_id, revision, "phase", change)
@@ -445,6 +492,12 @@ def question(goal_id: str, data: Mapping, revision: int) -> dict:
             "status": "needs_user" if escalated else "answered",
         }
         state["questions"].append(item)
+        for run in state["phase_runs"]:
+            if (
+                run["session_id"] == data["session_id"]
+                and run["status"] == "running"
+            ):
+                run["question_status"] = item["status"]
         state["next_action"] = "needs_user" if escalated else "resume_session"
         return state
 
@@ -485,7 +538,7 @@ def _scheduled_action(state: Mapping) -> str:
         return "resolve_integration_gates"
     runs = state.get("phase_runs", [])
     active = sum(
-        run.get("status") in {"running", "active", "in_progress"}
+        run.get("status") == "running"
         for run in runs
         if isinstance(run, Mapping)
     )

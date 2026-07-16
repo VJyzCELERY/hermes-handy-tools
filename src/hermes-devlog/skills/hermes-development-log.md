@@ -27,7 +27,8 @@ manifest hash, local snapshot, selected profile, matching mode, governing
 sources, model route, and allowed permissions. The normal semantic baseline is
 `issue → plan → implement → implementation review/remediation → merge-ready`.
 Record one owned phase run at a time with attempt, session, process identity,
-worktree, command reference, expected and observed evidence, and checkpoint.
+worktree, command reference, expected and observed evidence, lifecycle status,
+question status, and checkpoint.
 
 Goals may contain other goals recursively. Dependencies are separate directed
 edges: they block readiness but do not imply ownership. Child policy inherits

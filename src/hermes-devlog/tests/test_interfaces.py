@@ -1,3 +1,4 @@
+import copy
 import json
 
 import pytest
@@ -22,7 +23,12 @@ from hermes_devlog.service import (
 from hermes_devlog.validation import (
     activation_payload,
     expected_revision,
+    identifier,
+    integration_gate,
+    json_value,
     reject_secrets,
+    strict_mapping,
+    validate_state,
 )
 
 
@@ -535,3 +541,186 @@ def test_validation_rejects_secret_values_and_bad_revisions():
     with pytest.raises(CoordinatorError) as error:
         expected_revision(True)
     assert error.value.code == "invalid_revision"
+
+
+def test_github_token_is_rejected_without_mutation(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    from hermes_devlog.store import StateStore
+
+    store = StateStore.from_goal("demo")
+    before = store.read()
+    activity_before = store.activity_path.read_text()
+
+    with pytest.raises(CoordinatorError) as error:
+        service.gate(
+            "demo",
+            "integration",
+            {"id": "github", "status": "open", "evidence": "ghp_" + "a" * 36},
+            1,
+        )
+
+    assert error.value.code == "secret_value"
+    assert store.read() == before
+    assert store.activity_path.read_text() == activity_before
+
+
+def test_scope_questions_require_user(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+
+    result = question(
+        "demo",
+        {
+            "session_id": "s",
+            "question": "May I expand scope?",
+            "question_class": "general",
+            "answer": "yes",
+        },
+        1,
+    )
+
+    item = result["state"]["questions"][-1]
+    assert item["question_class"] == "scope"
+    assert item["status"] == "needs_user"
+
+
+def test_activation_requires_profile_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    data = activation()
+    del data["profile"]["name"]
+
+    with pytest.raises(CoordinatorError) as error:
+        activate(data)
+
+    assert error.value.code == "invalid_profile"
+    assert not (tmp_path / "dev-log" / "demo").exists()
+
+
+@pytest.mark.parametrize(
+    ("value", "code"),
+    [
+        ({"extra": True}, "unknown_field"),
+        ([], "invalid_object"),
+    ],
+)
+def test_validation_rejects_invalid_mappings(value, code):
+    with pytest.raises(CoordinatorError) as error:
+        strict_mapping(value, {"known"}, "test")
+    assert error.value.code == code
+
+
+@pytest.mark.parametrize("value", [None, "bad id", 1])
+def test_validation_rejects_invalid_identifiers(value):
+    with pytest.raises(CoordinatorError) as error:
+        identifier(value, "id")
+    assert error.value.code == "invalid_identifier"
+
+
+def test_validation_rejects_invalid_evidence_values():
+    with pytest.raises(CoordinatorError) as error:
+        json_value(object(), "evidence")
+    assert error.value.code == "invalid_state"
+    with pytest.raises(CoordinatorError) as error:
+        json_value({1: "value"}, "evidence")
+    assert error.value.code == "invalid_state"
+
+
+@pytest.mark.parametrize(
+    ("value", "code"),
+    [
+        ({"id": "gate"}, "invalid_gate"),
+        ({"id": "bad id", "status": "open", "evidence": {}}, "invalid_identifier"),
+        ({"id": "gate", "status": "other", "evidence": {}}, "invalid_gate"),
+    ],
+)
+def test_integration_gate_requires_bounded_evidence(value, code):
+    with pytest.raises(CoordinatorError) as error:
+        integration_gate(value)
+    assert error.value.code == code
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("template", {"release": "v1"}),
+        (
+            "template",
+            {
+                "release": "v1",
+                "commit": "bad",
+                "manifest_hash": "b" * 64,
+                "snapshot": "snap",
+            },
+        ),
+        (
+            "template",
+            {
+                "release": "v1",
+                "commit": "a" * 40,
+                "manifest_hash": "bad",
+                "snapshot": "snap",
+            },
+        ),
+        ("profile", {"name": "x", "match": "native", "sources": [1]}),
+        ("policy", {"notifications": "yes"}),
+    ],
+)
+def test_activation_rejects_malformed_bindings(field, value):
+    data = activation()
+    data[field] = value
+    with pytest.raises(CoordinatorError) as error:
+        activation_payload(data)
+    assert error.value.code in {"invalid_template", "invalid_profile", "invalid_policy"}
+
+
+def test_integration_gate_accepts_json_evidence():
+    assert integration_gate(
+        {"id": "gate", "status": "resolved", "evidence": ["verified"]}
+    )["status"] == "resolved"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda state: state.update(schema_version=99),
+        lambda state: state.update(revision=0),
+        lambda state: state.update(phase="bad"),
+        lambda state: state.update(next_action=""),
+        lambda state: state.update(capacity=0),
+        lambda state: state.update(policy={}),
+        lambda state: state.update(capacity=2),
+        lambda state: state["goal_graph"].update(nodes={}),
+        lambda state: state["goal_graph"]["nodes"]["demo"].pop("policy"),
+        lambda state: state["goal_graph"]["nodes"]["demo"].update(title=1),
+        lambda state: state["goal_graph"]["nodes"]["demo"].update(
+            disposition="bad"
+        ),
+        lambda state: state["goal_graph"]["nodes"]["demo"].update(
+            repositories=[1]
+        ),
+        lambda state: state["goal_graph"]["nodes"]["demo"].update(
+            source_bindings={}
+        ),
+        lambda state: state["goal_graph"]["nodes"]["demo"].update(contract=[]),
+        lambda state: state["goal_graph"].update(dependencies={}),
+        lambda state: state["goal_graph"]["dependencies"].append(
+            {"blocker": 1, "blocked": "demo"}
+        ),
+        lambda state: state["goal_graph"]["dependencies"].append(
+            {"blocker": "missing", "blocked": "demo"}
+        ),
+        lambda state: state.update(work_items=[]),
+        lambda state: state["work_items"].update(bad=[]),
+        lambda state: state.update(phase_runs={}),
+        lambda state: state.update(reviews={}),
+        lambda state: state.update(questions={}),
+    ],
+)
+def test_persisted_state_rejects_invalid_shapes(tmp_path, monkeypatch, mutate):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    state = activate(activation())["state"]
+    invalid = copy.deepcopy(state)
+    mutate(invalid)
+    with pytest.raises(CoordinatorError):
+        validate_state(invalid)

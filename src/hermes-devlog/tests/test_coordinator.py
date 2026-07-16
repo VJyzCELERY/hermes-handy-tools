@@ -1,7 +1,9 @@
 import copy
+import json
 
 import pytest
 
+from hermes_devlog.cli import main
 from hermes_devlog.errors import CoordinatorError
 from hermes_devlog.service import (
     activate,
@@ -418,3 +420,283 @@ def test_completion_requires_remediation_after_review_findings(
         complete("demo-goal", 7)
 
     assert error.value.code == "incomplete_workflow"
+
+
+def test_child_goal_persists_source_bindings(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+
+    result = add_goal(
+        "demo-goal",
+        {
+            "id": "child",
+            "title": "Child",
+            "source_bindings": {"issue": "#2"},
+            "completion_contract": {"final_verification": True},
+        },
+        1,
+    )
+
+    child = result["state"]["goal_graph"]["nodes"]["child"]
+    assert child["source_bindings"] == {"issue": "#2"}
+    assert child["completion_contract"] == {"final_verification": True}
+
+
+def test_phase_status_releases_and_enforces_capacity(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    data = payload()
+    data["policy"] = {"capacity": 1}
+    activate(data)
+    phase_data = {
+        "phase": "plan",
+        "attempt": 1,
+        "owner": "planner",
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "s1",
+        "process_id": "p1",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "plan",
+        "status": "completed",
+    }
+    phase("demo-goal", phase_data, 1)
+    phase_data.update({"session_id": "s2", "process_id": "p2", "status": "running"})
+    phase("demo-goal", phase_data, 2)
+
+    with pytest.raises(CoordinatorError) as error:
+        phase("demo-goal", {**phase_data, "status": "unknown"}, 3)
+
+    assert error.value.code == "invalid_phase_run"
+
+
+def test_phase_run_persists_question_status(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    phase_data = {
+        "phase": "plan",
+        "attempt": 1,
+        "owner": "planner",
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "s1",
+        "process_id": "p1",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "plan",
+        "status": "running",
+    }
+    phase("demo-goal", phase_data, 1)
+    assert StateStore.from_goal("demo-goal").read()["phase_runs"][-1][
+        "question_status"
+    ] == "none"
+
+    result = question(
+        "demo-goal",
+        {"session_id": "s1", "question": "which file?", "answer": "service.py"},
+        2,
+    )
+
+    assert result["state"]["phase_runs"][-1]["question_status"] == "answered"
+
+
+def test_phase_run_question_escalation_updates_active_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    phase_data = {
+        "phase": "plan",
+        "attempt": 1,
+        "owner": "planner",
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "s1",
+        "process_id": "p1",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "plan",
+        "status": "running",
+    }
+    phase("demo-goal", phase_data, 1)
+
+    result = question(
+        "demo-goal",
+        {"session_id": "s1", "question": "May I expand scope?", "answer": "yes"},
+        2,
+    )
+
+    assert result["state"]["phase_runs"][-1]["question_status"] == "needs_user"
+
+
+@pytest.mark.parametrize(
+    ("node", "code"),
+    [
+        ([], "invalid_object"),
+        ({"id": "child", "title": "Child", "source_bindings": {}}, "invalid_binding"),
+        (
+            {
+                "id": "child",
+                "title": "Child",
+                "completion_contract": {},
+            },
+            "invalid_binding",
+        ),
+        (
+            {
+                "id": "child",
+                "title": "Child",
+                "contract": {},
+                "completion_contract": {"done": True},
+            },
+            "invalid_binding",
+        ),
+    ],
+)
+def test_child_goal_bindings_are_strictly_validated(tmp_path, monkeypatch, node, code):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+
+    with pytest.raises(CoordinatorError) as error:
+        add_goal("demo-goal", node, 1)
+
+    assert error.value.code == code
+
+
+def test_goal_and_dependency_errors_are_structured(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    with pytest.raises(CoordinatorError) as error:
+        add_goal("demo-goal", {"id": "child", "title": "Child", "policy": []}, 1)
+    assert error.value.code == "invalid_object"
+    with pytest.raises(CoordinatorError) as error:
+        add_dependency("demo-goal", "missing", "demo-goal", 1)
+    assert error.value.code == "missing_goal"
+    with pytest.raises(CoordinatorError) as error:
+        set_goal_disposition("demo-goal", "missing", "resolved", 1)
+    assert error.value.code == "missing_goal"
+
+
+def test_store_rejects_duplicate_and_supports_scheduler_checkpoint(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    store = StateStore.from_goal("demo-goal")
+    with pytest.raises(CoordinatorError) as error:
+        activate(payload())
+    assert error.value.code == "already_exists"
+    assert store.set_next_action("resume")['next_action'] == "resume"
+    assert store.set_next_action("resume")['revision'] == 2
+
+
+def test_store_rejects_malformed_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    store = StateStore.from_goal("demo-goal")
+    store.config_path.write_text("{")
+    with pytest.raises(CoordinatorError) as error:
+        store.read_config()
+    assert error.value.code == "invalid_state"
+    store.config_path.write_text(json.dumps({"schema_version": 99}))
+    with pytest.raises(CoordinatorError) as error:
+        store.read_config()
+    assert error.value.code == "invalid_state"
+
+
+def test_cli_dispatches_remaining_operations(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    assert main(["activate", json.dumps(payload())]) == 0
+    capsys.readouterr()
+    assert main(
+        [
+            "goal",
+            json.dumps(
+                {
+                    "goal_id": "demo-goal",
+                    "node": {"id": "child", "title": "Child"},
+                    "expected_revision": 1,
+                }
+            ),
+        ]
+    ) == 0
+    capsys.readouterr()
+    assert main(
+        [
+            "dependency",
+            json.dumps(
+                {
+                    "goal_id": "demo-goal",
+                    "blocker": "demo-goal",
+                    "blocked": "child",
+                    "expected_revision": 2,
+                }
+            ),
+        ]
+    ) == 0
+    capsys.readouterr()
+    phase_data = {
+        "phase": "plan",
+        "attempt": 1,
+        "owner": "planner",
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "s",
+        "process_id": "p",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "plan",
+    }
+    assert main(
+        [
+            "phase",
+            json.dumps(
+                {"goal_id": "demo-goal", "data": phase_data, "expected_revision": 3}
+            ),
+        ]
+    ) == 0
+    capsys.readouterr()
+    for operation, data, revision in [
+        (
+            "review",
+            {"head": "h", "base": "b", "diff": "d", "findings": []},
+            4,
+        ),
+        (
+            "question",
+            {"session_id": "s", "question": "which file?", "answer": "x"},
+            5,
+        ),
+        ("complete", None, 6),
+        ("gate", {"name": "final_verification", "value": True}, 6),
+        (
+            "discovered_work",
+            {"item": {"id": "bug", "title": "bug"}},
+            7,
+        ),
+    ]:
+        envelope = {"goal_id": "demo-goal", "expected_revision": revision}
+        if operation == "complete":
+            pass
+        elif operation == "gate":
+            envelope.update(data)
+        else:
+            envelope["data" if operation in {"review", "question"} else "item"] = (
+                data if operation != "discovered_work" else data["item"]
+            )
+        assert main([operation, json.dumps(envelope)]) in {0, 1}
+        capsys.readouterr()

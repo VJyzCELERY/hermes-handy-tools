@@ -9,6 +9,12 @@ IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SHA1 = re.compile(r"^[0-9a-fA-F]{40}$")
 HASH = re.compile(r"^[0-9a-fA-F]{64}$")
 SECRET_WORDS = ("secret", "token", "password", "credential", "private_key", "api_key")
+SECRET_PATTERNS = (
+    re.compile(r"(?<![A-Za-z0-9])gh[opsur]_[A-Za-z0-9]{36}(?![A-Za-z0-9])"),
+    re.compile(r"(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}(?![A-Za-z0-9])"),
+    re.compile(r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+"),
+)
 PHASES = {
     "issue",
     "plan",
@@ -17,6 +23,8 @@ PHASES = {
     "remediation",
     "merge_ready",
 }
+PHASE_RUN_STATUSES = {"running", "completed", "failed", "cancelled"}
+QUESTION_STATUSES = {"none", "answered", "needs_user"}
 POLICY_FIELDS = {"capacity", "notifications", "merge", "discovered_work"}
 
 
@@ -33,7 +41,10 @@ def reject_secrets(value: object, path: str = "input") -> None:
     elif isinstance(value, list):
         for index, child in enumerate(value):
             reject_secrets(child, f"{path}[{index}]")
-    elif isinstance(value, str) and any(word in value.lower() for word in SECRET_WORDS):
+    elif isinstance(value, str) and (
+        any(word in value.lower() for word in SECRET_WORDS)
+        or any(pattern.search(value) for pattern in SECRET_PATTERNS)
+    ):
         raise CoordinatorError(
             "secret_value", f"secret-looking value is not allowed at {path}"
         )
@@ -81,6 +92,8 @@ def _template(value: object) -> dict:
 
 def _profile(value: object) -> dict:
     profile = strict_mapping(value, {"name", "match", "sources"}, "profile")
+    if not isinstance(profile.get("name"), str) or not profile["name"].strip():
+        raise CoordinatorError("invalid_profile", "profile name must be non-empty")
     if profile.get("match") not in {"native", "adapted", "fallback"}:
         raise CoordinatorError("invalid_profile", "profile match is unsupported")
     if not isinstance(profile.get("sources"), list) or not all(
@@ -239,15 +252,29 @@ def validate_state(state: object) -> dict:
             or not all(isinstance(item, str) for item in node["repositories"])
         ):
             raise CoordinatorError("invalid_state", "goal repositories must be strings")
-        for field in ("source_bindings", "completion_contract"):
-            if field in node:
-                if not isinstance(node[field], (Mapping, list)) or not node[field]:
-                    raise CoordinatorError(
-                        "invalid_state", f"goal {field} must be non-empty"
-                    )
-                json_value(node[field], f"goal.{field}")
-        if "contract" in node and not isinstance(node["contract"], Mapping):
-            raise CoordinatorError("invalid_state", "goal contract must be an object")
+        if "source_bindings" in node:
+            if not isinstance(node["source_bindings"], (Mapping, list)) or not node[
+                "source_bindings"
+            ]:
+                raise CoordinatorError(
+                    "invalid_state", "goal source_bindings must be non-empty"
+                )
+            json_value(node["source_bindings"], "goal.source_bindings")
+        contracts = [
+            node[field]
+            for field in ("completion_contract", "contract")
+            if field in node
+        ]
+        if contracts and (
+            len(contracts) != 1
+            or not isinstance(contracts[0], Mapping)
+            or not contracts[0]
+        ):
+            raise CoordinatorError(
+                "invalid_state", "goal completion contract is invalid"
+            )
+        if contracts:
+            json_value(contracts[0], "goal.completion_contract")
     roots = [
         node_id for node_id, node in nodes.items() if node.get("parent_id") is None
     ]
@@ -333,12 +360,13 @@ def validate_state(state: object) -> dict:
         "observed_evidence",
         "next_action",
         "status",
+        "question_status",
     }
     if not isinstance(data.get("phase_runs"), list):
         raise CoordinatorError("invalid_state", "phase_runs must be a list")
     for run in data["phase_runs"]:
         item = strict_mapping(run, phase_run_fields, "phase_run")
-        required = phase_run_fields - {"status"}
+        required = phase_run_fields
         if not required <= set(item) or item["phase"] not in PHASES:
             raise CoordinatorError("invalid_state", "phase run is incomplete")
         if (
@@ -359,8 +387,12 @@ def validate_state(state: object) -> dict:
         identifier(item["worker_role"], "phase_run.worker_role")
         json_value(item["expected_evidence"], "phase_run.expected_evidence")
         json_value(item["observed_evidence"], "phase_run.observed_evidence")
-        if "status" in item and not isinstance(item["status"], str):
+        if item["status"] not in PHASE_RUN_STATUSES:
             raise CoordinatorError("invalid_state", "phase run status is invalid")
+        if item["question_status"] not in QUESTION_STATUSES:
+            raise CoordinatorError(
+                "invalid_state", "phase run question status is invalid"
+            )
 
     if not isinstance(data.get("reviews"), list):
         raise CoordinatorError("invalid_state", "reviews must be a list")
