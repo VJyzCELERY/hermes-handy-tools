@@ -127,6 +127,16 @@ def _apply_goal(state: dict, goal_id: str, data: dict, child_id: str) -> dict:
         data.get("permissions", {}), parent_permissions
     )
     node_copy = deepcopy(data)
+    for field in ("repositories", "source_bindings"):
+        if field not in node_copy and field in parent:
+            node_copy[field] = deepcopy(parent[field])
+    if "completion_contract" not in node_copy and "contract" not in node_copy:
+        contract_field = next(
+            field
+            for field in ("completion_contract", "contract")
+            if field in parent
+        )
+        node_copy[contract_field] = deepcopy(parent[contract_field])
     node_copy.update(
         {
             "id": child_id,

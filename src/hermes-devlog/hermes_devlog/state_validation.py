@@ -175,20 +175,23 @@ def _policy(value: object) -> dict:
 def _validate_acyclic(graph: dict, message: str) -> None:
     visited = set()
     visiting = set()
-
-    def walk(node_id: str) -> None:
-        if node_id in visiting:
-            raise CoordinatorError("invalid_state", message)
-        if node_id in visited:
-            return
-        visiting.add(node_id)
-        for child_id in graph[node_id]:
-            walk(child_id)
-        visiting.remove(node_id)
-        visited.add(node_id)
-
     for node_id in graph:
-        walk(node_id)
+        if node_id in visited:
+            continue
+        stack = [(node_id, False)]
+        while stack:
+            current, exiting = stack.pop()
+            if exiting:
+                visiting.remove(current)
+                visited.add(current)
+                continue
+            if current in visiting:
+                raise CoordinatorError("invalid_state", message)
+            if current in visited:
+                continue
+            visiting.add(current)
+            stack.append((current, True))
+            stack.extend((child_id, False) for child_id in graph[current])
 
 
 def _validate_dependencies(value: object, nodes: Mapping) -> None:

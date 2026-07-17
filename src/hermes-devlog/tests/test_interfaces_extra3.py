@@ -315,6 +315,55 @@ def test_persisted_state_rejects_invalid_shapes(tmp_path, monkeypatch, mutate):
         validate_state(invalid)
 
 
+def test_state_validation_accepts_deep_containment_graph():
+    count = 1100
+    policy = {
+        "capacity": 1,
+        "notifications": True,
+        "merge": False,
+        "discovered_work": True,
+    }
+    profile = {"name": "fallback", "match": "fallback", "sources": []}
+    nodes = {
+        f"{index:04}": {
+            "id": f"{index:04}",
+            "title": "x",
+            "parent_id": f"{index + 1:04}" if index < count - 1 else None,
+            "profile": profile,
+            "permissions": {"implement": True},
+            "disposition": "open",
+            "policy": policy,
+        }
+        for index in range(count)
+    }
+
+    validate_state(
+        {
+            "schema_version": 1,
+            "revision": 1,
+            "phase": "issue",
+            "next_action": "x",
+            "goal_graph": {"nodes": nodes, "dependencies": []},
+            "work_items": {
+                key: {"phase": "issue", "next_action": "x"} for key in nodes
+            },
+            "phase_runs": [],
+            "reviews": [],
+            "questions": [],
+            "discovered_work": [],
+            "gates": {"integration": [], "final_verification": False},
+            "capacity": 1,
+            "policy": policy,
+            "completion": {
+                "ready": False,
+                "terminal": False,
+                "review_remediation_required": False,
+                "review_boundary_required": False,
+            },
+        }
+    )
+
+
 @pytest.mark.parametrize("field", ["schema_version", "revision"])
 def test_persisted_state_rejects_boolean_version_fields(tmp_path, monkeypatch, field):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))

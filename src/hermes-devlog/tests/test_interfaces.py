@@ -427,6 +427,34 @@ def test_sensitive_question_can_be_resolved_then_resumed(tmp_path, monkeypatch):
     assert resumed["state"]["phase_runs"][0]["status"] == "completed"
 
 
+def test_resolving_latest_question_keeps_older_question_pending(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    running_phase()
+    question(
+        "demo",
+        {"session_id": "s", "question": "May I expand scope?", "answer": "yes"},
+        2,
+    )
+    question(
+        "demo",
+        {"session_id": "s", "question": "May I merge?", "answer": "yes"},
+        3,
+    )
+
+    result = resolve_question(
+        "demo",
+        {
+            "session_id": "s",
+            "answer": "approved",
+            "authority_reference": "state:policy",
+        },
+        4,
+    )
+
+    assert result["state"]["phase_runs"][0]["question_status"] == "needs_user"
+
+
 def test_non_utf8_state_and_config_return_invalid_state(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(activation())

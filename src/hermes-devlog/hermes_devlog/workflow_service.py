@@ -126,8 +126,24 @@ def question(goal_id: str, data: Mapping, revision: int) -> dict:
         state["questions"].append(item)
         for run in state["phase_runs"]:
             if run["session_id"] == data["session_id"] and run["status"] == "running":
-                run["question_status"] = item["status"]
-        state["next_action"] = "needs_user" if escalated else "resume_session"
+                run["question_status"] = (
+                    "needs_user"
+                    if any(
+                        question["session_id"] == data["session_id"]
+                        and question["status"] == "needs_user"
+                        for question in state["questions"]
+                    )
+                    else "answered"
+                )
+        state["next_action"] = (
+            "needs_user"
+            if any(
+                question["session_id"] == data["session_id"]
+                and question["status"] == "needs_user"
+                for question in state["questions"]
+            )
+            else "resume_session"
+        )
         return state
 
     return _mutate(goal_id, revision, "question", change)
@@ -187,8 +203,16 @@ def resolve_question(goal_id: str, data: Mapping, revision: int) -> dict:
                 "status": "answered",
             }
         )
-        matching_runs[0]["question_status"] = "answered"
-        state["next_action"] = "resume_session"
+        has_pending = any(
+            item is not pending
+            and item["session_id"] == data["session_id"]
+            and item["status"] == "needs_user"
+            for item in state["questions"]
+        )
+        matching_runs[0]["question_status"] = (
+            "needs_user" if has_pending else "answered"
+        )
+        state["next_action"] = "needs_user" if has_pending else "resume_session"
         return state
 
     return _mutate(goal_id, revision, "resolve_question", change)

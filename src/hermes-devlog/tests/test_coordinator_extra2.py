@@ -185,6 +185,19 @@ def test_child_goal_bindings_are_strictly_validated(tmp_path, monkeypatch, node,
     assert error.value.code == code
 
 
+def test_child_goal_inherits_scope_bindings(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+
+    child = add_goal("demo-goal", {"id": "child", "title": "Child"}, 1)[
+        "state"
+    ]["goal_graph"]["nodes"]["child"]
+
+    assert child["repositories"] == payload()["repositories"]
+    assert child["source_bindings"] == payload()["source_bindings"]
+    assert child["completion_contract"] == payload()["completion_contract"]
+
+
 def test_goal_and_dependency_errors_are_structured(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(payload())
