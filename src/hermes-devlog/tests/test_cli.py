@@ -33,6 +33,7 @@ def test_activation_persists_pinned_state(tmp_path, monkeypatch, capsys):
         "repositories": ["org/demo"],
         "source_bindings": {"issue": "#1", "spec": "#4"},
         "completion_contract": {"final_verification": True},
+        "extra": {"integration": {"source": "cli"}},
     }
 
     assert main(["activate", json.dumps(payload)]) == 0
@@ -40,7 +41,8 @@ def test_activation_persists_pinned_state(tmp_path, monkeypatch, capsys):
     assert result["ok"] is True
     assert result["state"]["revision"] == 1
     assert result["state"]["next_action"] == "begin_issue"
-    assert (tmp_path / "dev-log" / "demo-goal" / "config.json").exists()
+    config_path = tmp_path / "dev-log" / "demo-goal" / "config.json"
+    assert json.loads(config_path.read_text())["extra"] == payload["extra"]
     amendment = {
         "goal_id": "demo-goal",
         "patch": {"extra": {}},

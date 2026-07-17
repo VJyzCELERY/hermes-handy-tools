@@ -48,6 +48,7 @@ def _dispatch(operation: str, payload: dict) -> dict:
             "source_bindings",
             "completion_contract",
             "contract",
+            "extra",
         },
         "status": {"goal_id"},
         "next": {"goal_id"},
