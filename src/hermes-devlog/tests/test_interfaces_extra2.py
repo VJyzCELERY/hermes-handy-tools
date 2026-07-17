@@ -19,6 +19,7 @@ from hermes_devlog.service import (
     gate,
     phase,
     question,
+    resolve_question,
     review,
     status,
 )
@@ -231,6 +232,59 @@ def test_unclassified_question_without_authority_reference_requires_user(
     )
 
     assert result["state"]["questions"][-1]["status"] == "needs_user"
+
+
+@pytest.mark.parametrize("authority_reference", ["rules:invented.md", "state:invented"])
+def test_unverified_authority_reference_keeps_sensitive_question_pending(
+    tmp_path, monkeypatch, authority_reference
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    running_phase()
+    question(
+        "demo",
+        {"session_id": "s", "question": "May I expand scope?", "answer": "yes"},
+        2,
+    )
+
+    result = resolve_question(
+        "demo",
+        {
+            "session_id": "s",
+            "answer": "Approved for the requested scope.",
+            "authority_reference": authority_reference,
+        },
+        3,
+    )
+
+    assert result["state"]["questions"][-1]["status"] == "needs_user"
+    assert result["state"]["phase_runs"][0]["question_status"] == "needs_user"
+
+
+def test_pinned_rule_authority_can_resolve_sensitive_question(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    data = activation()
+    data["profile"]["sources"] = ["AGENTS.md"]
+    activate(data)
+    running_phase()
+    question(
+        "demo",
+        {"session_id": "s", "question": "May I expand scope?", "answer": "yes"},
+        2,
+    )
+
+    result = resolve_question(
+        "demo",
+        {
+            "session_id": "s",
+            "answer": "Approved for the requested scope.",
+            "authority_reference": "rules:AGENTS.md",
+        },
+        3,
+    )
+
+    assert result["state"]["questions"][-1]["status"] == "answered"
+    assert result["state"]["phase_runs"][0]["question_status"] == "answered"
 
 
 def test_activation_requires_profile_name(tmp_path, monkeypatch):

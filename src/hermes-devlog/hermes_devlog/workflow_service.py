@@ -171,6 +171,7 @@ def resolve_question(goal_id: str, data: Mapping, revision: int) -> dict:
     authority_reference(data["authority_reference"])
 
     def change(state):
+        config = _store(goal_id).read_config()
         matching_runs = [
             run
             for run in state["phase_runs"]
@@ -193,6 +194,7 @@ def resolve_question(goal_id: str, data: Mapping, revision: int) -> dict:
             raise CoordinatorError(
                 "question_unresolved", "question session has no pending question"
             )
+        verified = _authority_is_verified(data["authority_reference"], state, config)
         state["questions"].append(
             {
                 "session_id": data["session_id"],
@@ -200,7 +202,7 @@ def resolve_question(goal_id: str, data: Mapping, revision: int) -> dict:
                 "answer": data["answer"],
                 "question_class": pending["question_class"],
                 "authority_reference": data["authority_reference"],
-                "status": "answered",
+                "status": "answered" if verified else "needs_user",
             }
         )
         has_pending = any(
@@ -216,6 +218,19 @@ def resolve_question(goal_id: str, data: Mapping, revision: int) -> dict:
         return state
 
     return _mutate(goal_id, revision, "resolve_question", change)
+
+
+def _authority_is_verified(reference: str, state: Mapping, config: Mapping) -> bool:
+    """Require an authority reference to resolve in pinned state or rules."""
+    source, _, target = reference.partition(":")
+    if source == "rules":
+        return target in config["profile"]["sources"]
+    current = state
+    for part in target.split("."):
+        if not isinstance(current, Mapping) or part not in current:
+            return False
+        current = current[part]
+    return True
 
 
 def status(goal_id: str) -> dict:
