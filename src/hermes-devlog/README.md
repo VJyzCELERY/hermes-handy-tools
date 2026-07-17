@@ -14,8 +14,24 @@ subprocess, or a merge command. Hermes owns those external actions; this
 package records their declared intent and verified outcomes.
 
 ```sh
-uv run hermes-devlog activate '{"goal_id":"demo","title":"Demo","template":{"release":"v1","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifest_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","snapshot":"snapshots/demo"},"profile":{"name":"native","match":"native","sources":[]},"routes":{"planner":{"model":"openai/gpt-5.6-terra","reasoning":"high"},"reviewer":{"model":"openai/gpt-5.6-terra","reasoning":"high","agent":"codex"},"worker":{"model":"openai/gpt-5.6-luna","reasoning":"high"}},"permissions":{"implement":true,"merge":false},"repositories":["org/demo"],"source_bindings":{"issue":"#1"},"completion_contract":{"final_verification":true}}'
+uv run hermes-devlog activate '<schema-v2-json-payload>'
 ```
+
+Schema v2 stores the root semantic goal in `config.goal` (`objective`, success
+criteria, and optional approach) and materializes it in the root state node.
+Subgoals live in `state.goal_graph` and carry the same semantic fields.
+
+`permissions` is the fixed execution-authority baseline: `claim`, `implement`,
+`commit`, `push`, `create_issue`, `create_pr`, `post_review`, and `merge` are
+all persisted as booleans. `create_pr` requires `push`, `push` requires
+`commit`, and `merge` requires `create_pr`. `policy` controls operating
+conditions (`capacity`, notifications, discovered work, auto-merge, and human
+merge approval); it does not grant authority. In particular, `policy.merge` is
+not a schema-v2 field.
+
+`governance` adds evolving rule provenance and constraints. Its sources pin a
+reference, content hash, and snapshot reference; constraints may narrow or
+explain existing controls but cannot override a `false` permission.
 
 ## Install into Hermes Agent
 

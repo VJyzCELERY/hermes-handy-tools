@@ -51,7 +51,13 @@ def activation(goal_id="demo", *, merge=False):
             "reviewer": {"model": "model", "reasoning": "high", "agent": "opencode"},
             "worker": {"model": "model", "reasoning": "high", "agent": "opencode"},
         },
-        "permissions": {"implement": True, "merge": merge},
+        "permissions": {
+            "implement": True,
+            "commit": merge,
+            "push": merge,
+            "create_pr": merge,
+            "merge": merge,
+        },
         "policy": {"merge": merge},
         "repositories": ["org/demo"],
         "source_bindings": {"issue": "#1", "spec": "#4"},
@@ -69,7 +75,8 @@ def running_phase(goal_id="demo", revision=1):
             "work_item_id": goal_id,
             "worker_role": "planner",
             "model": "model",
-            "reasoning": "high", "agent": "opencode",
+            "reasoning": "high",
+            "agent": "opencode",
             "session_id": "s",
             "process_id": "p",
             "command": "plan",
@@ -110,7 +117,8 @@ def test_implement_requires_isolated_reviewer(
         "work_item_id": "demo",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -147,7 +155,8 @@ def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
         "work_item_id": "demo",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -309,6 +318,7 @@ def test_persisted_dependency_cycle_is_rejected(tmp_path, monkeypatch):
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_state"
 
+
 def test_malformed_state_returns_structured_error(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(activation())
@@ -366,6 +376,7 @@ def test_cli_reports_structured_input_errors(tmp_path, monkeypatch, capsys):
     assert result["ok"] is False
     assert result["error"]["code"] == "unsupported_operation"
 
+
 def test_declared_scope_question_requires_user(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(activation())
@@ -415,9 +426,9 @@ def test_sensitive_question_can_be_resolved_then_resumed(tmp_path, monkeypatch):
             "question": "May I expand scope?",
             "answer": "Approved for the requested scope.",
             "question_class": "scope",
-                "authority_reference": "state:policy",
-                "status": "answered",
-                "extra": {},
+            "authority_reference": "state:policy",
+            "status": "answered",
+            "extra": {},
         }
     ]
     phase_data = {
@@ -427,7 +438,8 @@ def test_sensitive_question_can_be_resolved_then_resumed(tmp_path, monkeypatch):
         "work_item_id": "demo",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -477,8 +489,7 @@ def test_non_utf8_state_and_config_return_invalid_state(tmp_path, monkeypatch):
     store = StateStore.from_goal("demo")
     store.state_path.write_bytes(b"\xff")
     assert (
-        hermes_devlog("status", {"goal_id": "demo"})["error"]["code"]
-        == "invalid_state"
+        hermes_devlog("status", {"goal_id": "demo"})["error"]["code"] == "invalid_state"
     )
 
     activate(activation("other"))
@@ -496,7 +507,8 @@ def test_non_utf8_state_and_config_return_invalid_state(tmp_path, monkeypatch):
                 "work_item_id": "other",
                 "worker_role": "planner",
                 "model": "model",
-                "reasoning": "high", "agent": "opencode",
+                "reasoning": "high",
+                "agent": "opencode",
                 "session_id": "s",
                 "process_id": "p",
                 "command": "plan",
@@ -508,6 +520,7 @@ def test_non_utf8_state_and_config_return_invalid_state(tmp_path, monkeypatch):
         },
     )
     assert result["error"]["code"] == "invalid_state"
+
 
 def test_malformed_activity_record_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))

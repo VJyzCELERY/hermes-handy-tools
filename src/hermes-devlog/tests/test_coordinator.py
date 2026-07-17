@@ -115,7 +115,8 @@ def running_phase(goal_id, revision=1):
             "work_item_id": goal_id,
             "worker_role": "planner",
             "model": "model",
-            "reasoning": "high", "agent": "opencode",
+            "reasoning": "high",
+            "agent": "opencode",
             "session_id": "s",
             "process_id": "p",
             "command": "plan",
@@ -198,7 +199,8 @@ def test_implementation_review_rejects_builder_session(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "worker",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "shared",
         "process_id": "p",
         "command": "run",
@@ -280,7 +282,8 @@ def test_implementation_requires_permission(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -314,7 +317,8 @@ def test_child_implementation_permission_narrows(tmp_path, monkeypatch):
         "work_item_id": "child",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "child-session",
         "process_id": "child-process",
         "command": "plan",
@@ -358,7 +362,8 @@ def test_sensitive_question_cannot_resume_without_resolution(tmp_path, monkeypat
                 "work_item_id": "demo-goal",
                 "worker_role": "planner",
                 "model": "model",
-                "reasoning": "high", "agent": "opencode",
+                "reasoning": "high",
+                "agent": "opencode",
                 "session_id": "s",
                 "process_id": "p",
                 "command": "plan",
@@ -387,7 +392,8 @@ def test_independent_child_phase_lifecycles(tmp_path, monkeypatch):
         "work_item_id": "child-a",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "a-session",
         "process_id": "a-process",
         "command": "plan",
@@ -433,7 +439,8 @@ def test_phase_identity_cannot_cross_work_items(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "shared",
         "process_id": "p",
         "command": "plan",
@@ -491,7 +498,8 @@ def test_completion_requires_clean_review_children_and_dependencies(
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -576,7 +584,8 @@ def test_final_verification_can_enter_remediation(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "plan-session",
         "process_id": "plan-process",
         "command": "plan",
@@ -642,7 +651,7 @@ def test_child_policy_cannot_broaden_merge_authority(tmp_path, monkeypatch):
             {"id": "child", "title": "Child", "policy": {"merge": True}},
             1,
         )
-    assert error.value.code == "policy_broadening"
+    assert error.value.code == "invalid_policy"
 
 
 def test_merge_permission_gate(tmp_path, monkeypatch):
@@ -655,7 +664,8 @@ def test_merge_permission_gate(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -712,9 +722,11 @@ def test_child_policy_inherits(tmp_path, monkeypatch):
     assert result["state"]["goal_graph"]["nodes"]["child"]["policy"] == {
         "capacity": 1,
         "notifications": False,
-        "merge": False,
         "discovered_work": True,
+        "auto_merge": False,
+        "require_human_merge_approval": True,
     }
+
 
 def test_failed_mutation_activity_append_recovers_completed_commit(
     tmp_path, monkeypatch
@@ -796,7 +808,9 @@ def test_distinct_role_routes_are_pinned_and_mismatch_rejected(tmp_path, monkeyp
     data["routes"] = {
         "planner": {"model": "gpt-5.6-terra", "reasoning": "high", "agent": "opencode"},
         "reviewer": {
-            "model": "gpt-5.6-terra", "reasoning": "high", "agent": "opencode"
+            "model": "gpt-5.6-terra",
+            "reasoning": "high",
+            "agent": "opencode",
         },
         "worker": {"model": "gpt-5.6-luna", "reasoning": "high", "agent": "opencode"},
     }
@@ -812,7 +826,8 @@ def test_distinct_role_routes_are_pinned_and_mismatch_rejected(tmp_path, monkeyp
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "gpt-5.6-terra",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -833,7 +848,8 @@ def test_distinct_role_routes_are_pinned_and_mismatch_rejected(tmp_path, monkeyp
                 "attempt": 2,
                 "worker_role": "worker",
                 "model": "gpt-5.6-terra",
-                "reasoning": "high", "agent": "opencode",
+                "reasoning": "high",
+                "agent": "opencode",
             },
             2,
         )

@@ -272,7 +272,7 @@ class StateStore:
 
     def _read_state(self) -> dict:
         state = self._read_json(self.state_path, "goal state")
-        if not isinstance(state, dict) or state.get("schema_version") != 1:
+        if not isinstance(state, dict) or state.get("schema_version") != 2:
             raise CoordinatorError(
                 "unsupported_version", "state schema version is unsupported"
             )
@@ -280,7 +280,7 @@ class StateStore:
 
     def _read_config(self) -> dict:
         config = self._read_json(self.config_path, "goal config")
-        if not isinstance(config, dict) or config.get("schema_version") != 1:
+        if not isinstance(config, dict) or config.get("schema_version") != 2:
             raise CoordinatorError(
                 "invalid_state", "goal config version is unsupported"
             )
@@ -305,7 +305,10 @@ class StateStore:
             payload = {
                 key: value for key, value in config.items() if key != "schema_version"
             }
-            return activation_payload(payload)
+            validated = activation_payload(payload)
+            config.clear()
+            config.update({"schema_version": 2, **validated})
+            return config
         except CoordinatorError as exc:
             raise CoordinatorError("invalid_state", "goal config is invalid") from exc
 
@@ -313,9 +316,7 @@ class StateStore:
         """Reject state amendments that broaden or drift from config authority."""
         root = state["goal_graph"]["nodes"].get(config["goal_id"])
         contract_field = (
-            "completion_contract"
-            if "completion_contract" in config
-            else "contract"
+            "completion_contract" if "completion_contract" in config else "contract"
         )
         fields = (
             "permissions",
@@ -325,8 +326,15 @@ class StateStore:
             "source_bindings",
             contract_field,
         )
-        if not isinstance(root, dict) or root.get("parent_id") is not None or any(
-            root.get(field) != config.get(field) for field in fields
+        semantic_fields = ("objective", "success_criteria", "approach")
+        if (
+            not isinstance(root, dict)
+            or root.get("parent_id") is not None
+            or any(root.get(field) != config.get(field) for field in fields)
+            or any(
+                root.get(field) != config["goal"].get(field)
+                for field in semantic_fields
+            )
         ):
             raise CoordinatorError(
                 "invalid_state", "state root authority differs from config"
@@ -336,9 +344,7 @@ class StateStore:
         """Refresh state fields derived from a valid mutable config amendment."""
         root = state["goal_graph"]["nodes"][config["goal_id"]]
         contract_field = (
-            "completion_contract"
-            if "completion_contract" in config
-            else "contract"
+            "completion_contract" if "completion_contract" in config else "contract"
         )
         for field in (
             "permissions",
@@ -349,6 +355,8 @@ class StateStore:
             contract_field,
         ):
             root[field] = _copy(config[field])
+        for field in ("objective", "success_criteria", "approach"):
+            root[field] = _copy(config["goal"].get(field, []))
         state["policy"] = _copy(config["policy"])
         state["capacity"] = config["policy"]["capacity"]
 

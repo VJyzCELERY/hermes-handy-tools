@@ -56,9 +56,11 @@ def activate(payload: Mapping) -> dict:
     )
     policy = data.get("policy", {})
     config = {
-        "schema_version": 1,
+        "schema_version": 2,
         "goal_id": goal_id,
         "title": data["title"],
+        "goal": deepcopy(data["goal"]),
+        "governance": deepcopy(data["governance"]),
         "template": deepcopy(data["template"]),
         "profile": deepcopy(data["profile"]),
         "routes": deepcopy(data["routes"]),
@@ -70,7 +72,7 @@ def activate(payload: Mapping) -> dict:
         "extra": deepcopy(data.get("extra", {})),
     }
     state = {
-        "schema_version": 1,
+        "schema_version": 2,
         "revision": 1,
         "phase": "issue",
         "next_action": "begin_issue",
@@ -79,6 +81,9 @@ def activate(payload: Mapping) -> dict:
                 goal_id: {
                     "id": goal_id,
                     "title": data["title"],
+                    "objective": data["goal"]["objective"],
+                    "success_criteria": deepcopy(data["goal"]["success_criteria"]),
+                    "approach": deepcopy(data["goal"].get("approach", [])),
                     "parent_id": None,
                     "profile": deepcopy(data["profile"]),
                     "permissions": deepcopy(data["permissions"]),
@@ -127,7 +132,13 @@ def amend_config(
     reject_secrets(patch)
 
     def change(config: dict) -> dict:
-        config.update(deepcopy(dict(patch)))
+        updates = deepcopy(dict(patch))
+        for field in ("permissions", "policy"):
+            if field in updates and isinstance(updates[field], Mapping):
+                merged = deepcopy(config[field])
+                merged.update(updates[field])
+                updates[field] = merged
+        config.update(updates)
         if "extra" in config:
             config["extra"] = extra_metadata(config["extra"], "config.extra")
         return config
@@ -210,8 +221,7 @@ def _correct_phase_runs(current: list[dict], correction: object) -> None:
             "invalid_phase_run", "phase run correction must be a list"
         )
     indexed = {
-        (run["session_id"], run["attempt"], run["work_item_id"]): run
-        for run in current
+        (run["session_id"], run["attempt"], run["work_item_id"]): run for run in current
     }
     for patch in correction:
         if not isinstance(patch, Mapping):

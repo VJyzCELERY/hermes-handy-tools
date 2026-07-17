@@ -4,6 +4,7 @@ from collections.abc import Mapping
 
 from .errors import CoordinatorError
 from .validation import (
+    PERMISSION_FIELDS,
     PHASE_RUN_STATUSES,
     PHASES,
     POLICY_FIELDS,
@@ -13,6 +14,7 @@ from .validation import (
     SENSITIVE_QUESTION_CLASSES,
     authority_reference,
     extra_metadata,
+    goal_payload,
     identifier,
     integration_gate,
     json_value,
@@ -22,6 +24,7 @@ from .validation import (
     profile_payload,
     review_identity,
     strict_mapping,
+    validate_authority,
 )
 
 
@@ -48,12 +51,10 @@ def _validate_goal_graph(graph: object, parent_policy: dict) -> dict:
         if parent_id is not None:
             parent = nodes[parent_id]
             _validate_policy_narrowing(node["policy"], parent["policy"])
-            if (
-                PROFILE_MATCH_RANK[node["profile"]["match"]]
-                < PROFILE_MATCH_RANK[parent["profile"]["match"]]
-                or not set(node["profile"]["sources"]).issubset(
-                    parent["profile"]["sources"]
-                )
+            if PROFILE_MATCH_RANK[node["profile"]["match"]] < PROFILE_MATCH_RANK[
+                parent["profile"]["match"]
+            ] or not set(node["profile"]["sources"]).issubset(
+                parent["profile"]["sources"]
             ):
                 raise CoordinatorError(
                     "invalid_state", "child profile broadens parent profile"
@@ -100,6 +101,9 @@ def _validate_goal_node(node_id: object, value: object) -> None:
         {
             "id",
             "title",
+            "objective",
+            "success_criteria",
+            "approach",
             "parent_id",
             "profile",
             "permissions",
@@ -115,6 +119,8 @@ def _validate_goal_node(node_id: object, value: object) -> None:
     if not {
         "id",
         "title",
+        "objective",
+        "success_criteria",
         "parent_id",
         "profile",
         "permissions",
@@ -135,9 +141,20 @@ def _validate_goal_node(node_id: object, value: object) -> None:
         "excluded",
     }:
         raise CoordinatorError("invalid_state", "goal disposition is unsupported")
-    _policy(node["policy"])
-    permission_scope(node["permissions"])
+    policy = _policy(node["policy"])
+    permissions = permission_scope(node["permissions"])
+    if set(node["permissions"]) != PERMISSION_FIELDS:
+        raise CoordinatorError("invalid_state", "goal permissions are incomplete")
+    validate_authority(permissions, policy)
     profile_payload(node["profile"])
+    goal_payload(
+        {
+            "objective": node["objective"],
+            "success_criteria": node["success_criteria"],
+            "approach": node.get("approach", []),
+        },
+        "goal_graph.node",
+    )
     if "repositories" in node and (
         not isinstance(node["repositories"], list)
         or not node["repositories"]
@@ -174,9 +191,7 @@ def _policy(value: object) -> dict:
         or data["capacity"] < 1
     ):
         raise CoordinatorError("invalid_state", "goal policy capacity is invalid")
-    if any(
-        not isinstance(data[field], bool) for field in POLICY_FIELDS - {"capacity"}
-    ):
+    if any(not isinstance(data[field], bool) for field in POLICY_FIELDS - {"capacity"}):
         raise CoordinatorError("invalid_state", "goal policy flags are invalid")
     return data
 
@@ -377,9 +392,7 @@ def _validate_question_record(item: dict, classes: set[str]) -> None:
 
 def _validate_question_fields(item: dict, classes: set[str]) -> None:
     required = ("session_id", "question", "question_class", "status")
-    if not all(
-        isinstance(item.get(field), str) and item[field] for field in required
-    ):
+    if not all(isinstance(item.get(field), str) and item[field] for field in required):
         raise CoordinatorError("invalid_state", "question record is incomplete")
     if item["question_class"] not in classes:
         raise CoordinatorError("invalid_state", "question class is unsupported")
@@ -412,9 +425,7 @@ def _validate_question_status(item: dict) -> None:
         and item["question_class"] not in SENSITIVE_QUESTION_CLASSES
         and "authority_reference" in item
     ):
-        raise CoordinatorError(
-            "invalid_state", "escalated question is incompatible"
-        )
+        raise CoordinatorError("invalid_state", "escalated question is incompatible")
 
 
 def _validate_discovered_work(value: object) -> None:
@@ -491,7 +502,7 @@ def validate_state(state: object) -> dict:
     data = strict_mapping(state, allowed, "state")
     if not set(data) <= allowed or not (allowed - {"extra"}) <= set(data):
         raise CoordinatorError("invalid_state", "state schema is incomplete")
-    if isinstance(data.get("schema_version"), bool) or data.get("schema_version") != 1:
+    if isinstance(data.get("schema_version"), bool) or data.get("schema_version") != 2:
         raise CoordinatorError(
             "unsupported_version", "state schema version is unsupported"
         )

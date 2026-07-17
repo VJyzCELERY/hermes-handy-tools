@@ -30,9 +30,7 @@ def review(goal_id: str, data: Mapping, revision: int) -> dict:
     if (
         not required <= set(data)
         or set(data) - {"head", "base", "diff", "findings", "extra"}
-        or not all(
-        isinstance(data[key], str) for key in required - {"findings"}
-        )
+        or not all(isinstance(data[key], str) for key in required - {"findings"})
     ):
         raise CoordinatorError(
             "invalid_review", "review requires head, base, diff, and findings"
@@ -65,6 +63,7 @@ def review(goal_id: str, data: Mapping, revision: int) -> dict:
         return state
 
     return _mutate(goal_id, revision, "review", change)
+
 
 def question(goal_id: str, data: Mapping, revision: int) -> dict:
     """Record an answer or escalate a worker question."""
@@ -127,11 +126,7 @@ def question(goal_id: str, data: Mapping, revision: int) -> dict:
             and not sensitive
             and _authority_is_verified(data["authority_reference"], state, config)
         )
-        escalated = (
-            not approved
-            or bool(data.get("escalate"))
-            or not data.get("answer")
-        )
+        escalated = not approved or bool(data.get("escalate")) or not data.get("answer")
         item = {
             **dict(data),
             "question_class": question_class,
@@ -224,8 +219,7 @@ def resolve_question(goal_id: str, data: Mapping, revision: int) -> dict:
         else:
             pending["escalate"] = True
         has_pending = any(
-            item["session_id"] == data["session_id"]
-            and item["status"] == "needs_user"
+            item["session_id"] == data["session_id"] and item["status"] == "needs_user"
             for item in state["questions"]
         )
         matching_runs[0]["question_status"] = (
@@ -242,6 +236,10 @@ def _authority_is_verified(reference: str, state: Mapping, config: Mapping) -> b
     source, _, target = reference.partition(":")
     if source == "rules":
         return target in config["profile"]["sources"]
+    if source == "governance":
+        sources = config["governance"]["sources"]
+        constraints = config["governance"]["constraints"]
+        return any(item["id"] == target for item in [*sources, *constraints])
     current = state
     for part in target.split("."):
         if not isinstance(current, Mapping) or part not in current:
@@ -253,6 +251,7 @@ def _authority_is_verified(reference: str, state: Mapping, config: Mapping) -> b
 def status(goal_id: str) -> dict:
     """Return current state without mutation."""
     return {"state": _store(goal_id).read()}
+
 
 def _question_class(text: str) -> str:
     """Classify questions conservatively before accepting worker answers."""
@@ -268,6 +267,7 @@ def _question_class(text: str) -> str:
     if "scope" in lowered:
         return "scope"
     return "general"
+
 
 def _scheduled_action(state: Mapping) -> str:
     """Choose one ready child without mutating the graph."""
@@ -310,12 +310,14 @@ def _scheduled_action(state: Mapping) -> str:
         )
     return state.get("next_action", "begin_issue")
 
+
 def next_action(goal_id: str) -> dict:
     """Return the deterministic resume action."""
     store = _store(goal_id)
     state = store.read()
     action = _scheduled_action(state)
     return {"next_action": action, "revision": state["revision"]}
+
 
 def complete(goal_id: str, revision: int) -> dict:
     """Mark a goal merge-ready only after every completion gate passes."""
@@ -406,11 +408,11 @@ def complete(goal_id: str, revision: int) -> dict:
             node.get("disposition") not in TERMINAL_DISPOSITIONS
             or (
                 node.get("disposition") == "resolved"
-                and not required_phases <= {
+                and not required_phases
+                <= {
                     run["phase"]
                     for run in state["phase_runs"]
-                    if run["work_item_id"] == node_id
-                    and run["status"] == "completed"
+                    if run["work_item_id"] == node_id and run["status"] == "completed"
                 }
             )
             for node_id, node in nodes.items()
@@ -427,13 +429,9 @@ def complete(goal_id: str, revision: int) -> dict:
             raise CoordinatorError(
                 "incomplete_dependencies", "dependency blockers are unresolved"
             )
-        if (
-            not config["permissions"].get("merge", False)
-            or not config["policy"].get("merge", False)
-            or not state["policy"].get("merge", False)
-        ):
+        if not config["permissions"]["merge"]:
             raise CoordinatorError(
-                "merge_not_authorized", "merge permission and policy are required"
+                "merge_not_authorized", "merge permission is required"
             )
         state["completion"] = {
             "ready": True,
@@ -446,6 +444,7 @@ def complete(goal_id: str, revision: int) -> dict:
         return state
 
     return {"state": store.mutate(revision, "complete", change)}
+
 
 def gate(goal_id: str, name: str, value: object, revision: int) -> dict:
     """Record a verified integration or final-verification gate."""
@@ -489,6 +488,7 @@ def gate(goal_id: str, name: str, value: object, revision: int) -> dict:
         return state
 
     return _mutate(goal_id, revision, "gate", change)
+
 
 def discovered_work(goal_id: str, item: Mapping, revision: int) -> dict:
     """Record discovered work until Hermes explicitly disposes of it."""

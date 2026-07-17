@@ -9,12 +9,13 @@ from .service_common import (
     _mutate,
 )
 from .validation import (
+    PERMISSION_FIELDS,
     PROFILE_MATCH_RANK,
     extra_metadata,
+    goal_payload,
     identifier,
     json_value,
     normalized_policy,
-    permission_scope,
     profile_payload,
     reject_secrets,
 )
@@ -46,6 +47,9 @@ def _validate_goal_fields(data: dict) -> None:
     if set(data) - {
         "id",
         "title",
+        "objective",
+        "success_criteria",
+        "approach",
         "parent_id",
         "profile",
         "permissions",
@@ -55,17 +59,40 @@ def _validate_goal_fields(data: dict) -> None:
         "contract",
         "policy",
         "disposition",
+        "extra",
     }:
         raise CoordinatorError("unknown_field", "unknown goal field")
     if not isinstance(data.get("title"), str) or not data["title"]:
         raise CoordinatorError("invalid_title", "goal title must be non-empty")
+    data.setdefault("objective", data["title"])
+    data.setdefault(
+        "success_criteria",
+        [
+            {
+                "id": "completion-contract",
+                "description": "Satisfy the inherited completion contract.",
+                "verification": "coordinator validation",
+            }
+        ],
+    )
+    data.setdefault("approach", [])
     if data.get("disposition", "open") not in {
         "open",
         *TERMINAL_DISPOSITIONS,
     }:
         raise CoordinatorError("invalid_goal", "unsupported goal disposition")
+    goal_payload(
+        {
+            "objective": data.get("objective"),
+            "success_criteria": data.get("success_criteria"),
+            "approach": data.get("approach", []),
+        },
+        "goal",
+    )
     if "permissions" in data:
-        permission_scope(data["permissions"])
+        _partial_permissions(data["permissions"])
+    if "extra" in data:
+        data["extra"] = extra_metadata(data["extra"], "goal.extra")
     _validate_goal_bindings(data)
 
 
@@ -122,11 +149,9 @@ def _apply_goal(state: dict, goal_id: str, data: dict, child_id: str) -> dict:
             "scope_broadening", "child repositories must stay within parent scope"
         )
     child_profile = profile_payload(data.get("profile", parent_profile))
-    if (
-        PROFILE_MATCH_RANK[child_profile["match"]]
-        < PROFILE_MATCH_RANK[parent_profile["match"]]
-        or not set(child_profile["sources"]).issubset(parent_profile["sources"])
-    ):
+    if PROFILE_MATCH_RANK[child_profile["match"]] < PROFILE_MATCH_RANK[
+        parent_profile["match"]
+    ] or not set(child_profile["sources"]).issubset(parent_profile["sources"]):
         raise CoordinatorError(
             "profile_broadening", "child profile cannot broaden parent profile"
         )
@@ -140,9 +165,7 @@ def _apply_goal(state: dict, goal_id: str, data: dict, child_id: str) -> dict:
             node_copy[field] = deepcopy(parent[field])
     if "completion_contract" not in node_copy and "contract" not in node_copy:
         contract_field = next(
-            field
-            for field in ("completion_contract", "contract")
-            if field in parent
+            field for field in ("completion_contract", "contract") if field in parent
         )
         node_copy[contract_field] = deepcopy(parent[contract_field])
     node_copy.update(
@@ -164,13 +187,7 @@ def _apply_goal(state: dict, goal_id: str, data: dict, child_id: str) -> dict:
 
 
 def _narrow_permissions(child_permissions: object, parent_permissions: dict) -> dict:
-    requested = (
-        permission_scope(child_permissions) if child_permissions else {}
-    )
-    if set(requested) - set(parent_permissions):
-        raise CoordinatorError(
-            "permission_broadening", "child permissions must be inherited"
-        )
+    requested = _partial_permissions(child_permissions) if child_permissions else {}
     if any(
         value and not parent_permissions[permission]
         for permission, value in requested.items()
@@ -184,7 +201,22 @@ def _narrow_permissions(child_permissions: object, parent_permissions: dict) -> 
     }
 
 
+def _partial_permissions(value: object) -> dict:
+    """Validate an optional narrowing subset for one child goal."""
+    if not isinstance(value, Mapping) or not set(value).issubset(PERMISSION_FIELDS):
+        raise CoordinatorError("invalid_permissions", "child permissions are invalid")
+    if not all(isinstance(item, bool) for item in value.values()):
+        raise CoordinatorError(
+            "invalid_permissions", "child permissions must be boolean"
+        )
+    return dict(value)
+
+
 def _narrow_policy(child_policy: object, parent_policy: dict) -> dict:
+    if not isinstance(child_policy, Mapping) or not set(child_policy).issubset(
+        normalized_policy({})
+    ):
+        raise CoordinatorError("invalid_policy", "child policy is invalid")
     normalized = normalized_policy(child_policy)
     selected = {field: normalized[field] for field in child_policy}
     for field, child_value in selected.items():
@@ -199,6 +231,7 @@ def _narrow_policy(child_policy: object, parent_policy: dict) -> dict:
                 f"child {field} policy cannot broaden parent authority",
             )
     return selected
+
 
 def set_goal_disposition(
     goal_id: str, child_id: str, disposition: str, revision: int
@@ -227,6 +260,7 @@ def set_goal_disposition(
         return state
 
     return _mutate(goal_id, revision, "goal_disposition", change)
+
 
 def add_dependency(
     goal_id: str,

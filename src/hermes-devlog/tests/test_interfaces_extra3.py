@@ -50,7 +50,13 @@ def activation(goal_id="demo", *, merge=False):
             "reviewer": {"model": "model", "reasoning": "high", "agent": "opencode"},
             "worker": {"model": "model", "reasoning": "high", "agent": "opencode"},
         },
-        "permissions": {"implement": True, "merge": merge},
+        "permissions": {
+            "implement": True,
+            "commit": merge,
+            "push": merge,
+            "create_pr": merge,
+            "merge": merge,
+        },
         "policy": {"merge": merge},
         "repositories": ["org/demo"],
         "source_bindings": {"issue": "#1", "spec": "#4"},
@@ -68,7 +74,8 @@ def running_phase(goal_id="demo", revision=1):
             "work_item_id": goal_id,
             "worker_role": "planner",
             "model": "model",
-            "reasoning": "high", "agent": "opencode",
+            "reasoning": "high",
+            "agent": "opencode",
             "session_id": "s",
             "process_id": "p",
             "command": "plan",
@@ -191,7 +198,8 @@ def test_malformed_paths_reject_worktree(tmp_path, monkeypatch, worktree):
         "work_item_id": "demo",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -224,7 +232,8 @@ def test_dangling_phase_run_is_rejected(tmp_path, monkeypatch):
             "work_item_id": "missing",
             "worker_role": "planner",
             "model": "model",
-            "reasoning": "high", "agent": "opencode",
+            "reasoning": "high",
+            "agent": "opencode",
             "session_id": "s",
             "process_id": "p",
             "command": "plan",
@@ -324,17 +333,37 @@ def test_state_validation_accepts_deep_containment_graph():
     policy = {
         "capacity": 1,
         "notifications": True,
-        "merge": False,
         "discovered_work": True,
+        "auto_merge": False,
+        "require_human_merge_approval": True,
+    }
+    permissions = {
+        "claim": False,
+        "implement": True,
+        "commit": False,
+        "push": False,
+        "create_issue": False,
+        "create_pr": False,
+        "post_review": False,
+        "merge": False,
     }
     profile = {"name": "fallback", "match": "fallback", "sources": []}
     nodes = {
         f"{index:04}": {
             "id": f"{index:04}",
             "title": "x",
+            "objective": "x",
+            "success_criteria": [
+                {
+                    "id": "SC-1",
+                    "description": "x",
+                    "verification": "x",
+                }
+            ],
+            "approach": [],
             "parent_id": f"{index + 1:04}" if index < count - 1 else None,
             "profile": profile,
-            "permissions": {"implement": True},
+            "permissions": permissions,
             "disposition": "open",
             "policy": policy,
         }
@@ -343,7 +372,7 @@ def test_state_validation_accepts_deep_containment_graph():
 
     validate_state(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "revision": 1,
             "phase": "issue",
             "next_action": "x",

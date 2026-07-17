@@ -102,7 +102,7 @@ def test_state_amendment_cannot_broaden_root_authority(tmp_path, monkeypatch):
     graph = deepcopy(current["goal_graph"])
     graph["nodes"]["contract-goal"]["permissions"]["merge"] = True
 
-    with pytest.raises(CoordinatorError, match="authority"):
+    with pytest.raises(CoordinatorError, match="merge requires create_pr"):
         amend_state(
             "contract-goal",
             {"goal_graph": graph},

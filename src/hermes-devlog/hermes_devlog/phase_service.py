@@ -90,9 +90,7 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
                 "invalid_phase_run", f"phase {field} must be non-empty"
             )
     if data["worker_role"] not in WORKER_ROUTES:
-        raise CoordinatorError(
-            "invalid_phase_run", "worker_role has no pinned route"
-        )
+        raise CoordinatorError("invalid_phase_run", "worker_role has no pinned route")
     json_value(data["expected_evidence"], "phase.expected_evidence")
     json_value(data["observed_evidence"], "phase.observed_evidence")
     identifier(data["work_item_id"], "phase.work_item_id")
@@ -135,17 +133,13 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
             if run["session_id"] == data["session_id"]
             and run["attempt"] == data["attempt"]
         ]
-        if any(
-            run["work_item_id"] != data["work_item_id"] for run in identity_runs
-        ):
+        if any(run["work_item_id"] != data["work_item_id"] for run in identity_runs):
             raise CoordinatorError(
                 "invalid_phase_run",
                 "phase session and attempt belong to another work item",
             )
         matching_runs = [
-            run
-            for run in identity_runs
-            if run["work_item_id"] == data["work_item_id"]
+            run for run in identity_runs if run["work_item_id"] == data["work_item_id"]
         ]
         if len(matching_runs) > 1:
             raise CoordinatorError(
@@ -195,9 +189,9 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
                     "invalid_phase_run",
                     f"{target.replace('_', ' ')} must use an isolated session",
                 )
-        if target in {"implement", "remediation"} and not state["goal_graph"][
-            "nodes"
-        ][data["work_item_id"]]["permissions"].get("implement", False):
+        if target in {"implement", "remediation"} and not state["goal_graph"]["nodes"][
+            data["work_item_id"]
+        ]["permissions"].get("implement", False):
             raise CoordinatorError(
                 "implementation_not_authorized",
                 "implementation permission is required",

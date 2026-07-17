@@ -51,7 +51,13 @@ def activation(goal_id="demo", *, merge=False):
             "reviewer": {"model": "model", "reasoning": "high", "agent": "opencode"},
             "worker": {"model": "model", "reasoning": "high", "agent": "opencode"},
         },
-        "permissions": {"implement": True, "merge": merge},
+        "permissions": {
+            "implement": True,
+            "commit": merge,
+            "push": merge,
+            "create_pr": merge,
+            "merge": merge,
+        },
         "policy": {"merge": merge},
         "repositories": ["org/demo"],
         "source_bindings": {"issue": "#1", "spec": "#4"},
@@ -69,7 +75,8 @@ def running_phase(goal_id="demo", revision=1):
             "work_item_id": goal_id,
             "worker_role": "planner",
             "model": "model",
-            "reasoning": "high", "agent": "opencode",
+            "reasoning": "high",
+            "agent": "opencode",
             "session_id": "s",
             "process_id": "p",
             "command": "plan",
@@ -157,7 +164,9 @@ def test_activity_records_are_timestamped_attributed_and_verified(
             {
                 "planner": {"model": "model", "reasoning": "high", "agent": "opencode"},
                 "reviewer": {
-                    "model": "model", "reasoning": "high", "agent": "opencode"
+                    "model": "model",
+                    "reasoning": "high",
+                    "agent": "opencode",
                 },
             },
             "invalid_routes",
@@ -172,6 +181,7 @@ def test_activation_rejects_invalid_fields(field, value, code):
     with pytest.raises(CoordinatorError) as error:
         activation_payload(data)
     assert error.value.code == code
+
 
 def test_validation_rejects_secret_values_and_bad_revisions():
     with pytest.raises(CoordinatorError) as error:
@@ -225,10 +235,6 @@ def test_scope_questions_require_user(tmp_path, monkeypatch):
     assert item["status"] == "needs_user"
 
 
-
-
-
-
 def test_unclassified_question_without_authority_reference_requires_user(
     tmp_path, monkeypatch
 ):
@@ -275,9 +281,7 @@ def test_unclassified_question_requires_verified_authority_reference(
 def test_activation_rejects_pem_private_key(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     data = activation()
-    data["source_bindings"]["evidence"] = (
-        "-----BEGIN OPENSSH PRIVATE KEY-----\nkey"
-    )
+    data["source_bindings"]["evidence"] = "-----BEGIN OPENSSH PRIVATE KEY-----\nkey"
 
     with pytest.raises(CoordinatorError):
         activate(data)

@@ -39,7 +39,23 @@ SENSITIVE_QUESTION_CLASSES = {
     "external_approval",
     "merge",
 }
-POLICY_FIELDS = {"capacity", "notifications", "merge", "discovered_work"}
+PERMISSION_FIELDS = {
+    "claim",
+    "implement",
+    "commit",
+    "push",
+    "create_issue",
+    "create_pr",
+    "post_review",
+    "merge",
+}
+POLICY_FIELDS = {
+    "capacity",
+    "notifications",
+    "discovered_work",
+    "auto_merge",
+    "require_human_merge_approval",
+}
 PROFILE_MATCH_RANK = {"native": 0, "adapted": 1, "fallback": 2}
 
 
@@ -192,30 +208,171 @@ def _policy(value: object) -> dict:
 
 
 def normalized_policy(value: object) -> dict:
-    """Return a complete policy with restrictive merge defaults."""
-    policy = _policy(value)
+    """Return a complete policy with restrictive autonomous-action defaults."""
+    policy_value = dict(value) if isinstance(value, Mapping) else value
+    if isinstance(policy_value, dict):
+        policy_value.pop("merge", None)
+    policy = _policy(policy_value)
     return {
         "capacity": policy.get("capacity", 1),
         "notifications": policy.get("notifications", True),
-        "merge": policy.get("merge", False),
         "discovered_work": policy.get("discovered_work", True),
+        "auto_merge": policy.get("auto_merge", False),
+        "require_human_merge_approval": policy.get(
+            "require_human_merge_approval", True
+        ),
     }
 
 
 def permission_scope(value: object) -> dict:
-    """Validate one effective boolean permission scope."""
-    if (
-        not isinstance(value, Mapping)
-        or not value
-        or not all(
-            isinstance(key, str) and isinstance(item, bool)
-            for key, item in value.items()
-        )
-    ):
+    """Validate the fixed executable-authority permission set."""
+    if not isinstance(value, Mapping) or not set(value).issubset(PERMISSION_FIELDS):
         raise CoordinatorError(
-            "invalid_permissions", "permissions must be a non-empty boolean object"
+            "invalid_permissions", "permissions must contain the fixed authority set"
         )
-    return dict(value)
+    if not all(isinstance(item, bool) for item in value.values()):
+        raise CoordinatorError("invalid_permissions", "permissions must be boolean")
+    permissions = {field: bool(value.get(field, False)) for field in PERMISSION_FIELDS}
+    if permissions["create_pr"] and not permissions["push"]:
+        raise CoordinatorError("invalid_permissions", "create_pr requires push")
+    if permissions["push"] and not permissions["commit"]:
+        raise CoordinatorError("invalid_permissions", "push requires commit")
+    if permissions["merge"] and not permissions["create_pr"]:
+        raise CoordinatorError("invalid_permissions", "merge requires create_pr")
+    return permissions
+
+
+def validate_authority(permissions: dict, policy: dict) -> None:
+    """Validate policy combinations against fixed executable authority."""
+    if policy["auto_merge"] and not permissions["merge"]:
+        raise CoordinatorError("invalid_policy", "auto_merge requires merge permission")
+    if policy["auto_merge"] and policy["require_human_merge_approval"]:
+        raise CoordinatorError(
+            "invalid_policy", "auto_merge conflicts with human merge approval"
+        )
+
+
+def goal_payload(value: object, path: str = "goal") -> dict:
+    """Validate durable semantic objective and acceptance criteria."""
+    data = strict_mapping(value, {"objective", "success_criteria", "approach"}, path)
+    if not isinstance(data.get("objective"), str) or not data["objective"].strip():
+        raise CoordinatorError("invalid_goal", f"{path}.objective must be non-empty")
+    criteria = data.get("success_criteria")
+    if not isinstance(criteria, list) or not criteria:
+        raise CoordinatorError("invalid_goal", f"{path}.success_criteria is required")
+    identifiers = set()
+    for item in criteria:
+        criterion = strict_mapping(
+            item, {"id", "description", "verification"}, f"{path}.success_criteria"
+        )
+        criterion_id = identifier(criterion.get("id"), f"{path}.success_criteria.id")
+        if criterion_id in identifiers:
+            raise CoordinatorError(
+                "invalid_goal", "success criterion ids must be unique"
+            )
+        identifiers.add(criterion_id)
+        if not all(
+            isinstance(criterion.get(field), str) and criterion[field].strip()
+            for field in ("description", "verification")
+        ):
+            raise CoordinatorError("invalid_goal", "success criterion is incomplete")
+    approach = data.get("approach", [])
+    if not isinstance(approach, list) or not all(
+        isinstance(item, str) and item.strip() for item in approach
+    ):
+        raise CoordinatorError("invalid_goal", f"{path}.approach is invalid")
+    data["approach"] = approach
+    return data
+
+
+def governance_payload(value: object) -> dict:
+    """Validate additive governance provenance and constraints."""
+    data = strict_mapping(value, {"sources", "constraints"}, "governance")
+    sources = data.get("sources")
+    constraints = data.get("constraints")
+    if not isinstance(sources, list) or not isinstance(constraints, list):
+        raise CoordinatorError("invalid_governance", "governance lists are required")
+    _governance_sources(sources)
+    _governance_constraints(constraints)
+    return data
+
+
+def _governance_sources(sources: list) -> None:
+    identifiers = set()
+    fields = {"id", "kind", "reference", "content_hash", "snapshot_ref", "required"}
+    for item in sources:
+        source = strict_mapping(item, fields, "governance.source")
+        source_id = identifier(source.get("id"), "governance.source.id")
+        if source_id in identifiers:
+            raise CoordinatorError(
+                "invalid_governance", "governance source ids are unique"
+            )
+        identifiers.add(source_id)
+        if not all(
+            isinstance(source.get(field), str) and source[field].strip()
+            for field in ("kind", "reference")
+        ):
+            raise CoordinatorError(
+                "invalid_governance", "governance source is incomplete"
+            )
+        content_hash = source.get("content_hash")
+        if not isinstance(content_hash, str) or not re.fullmatch(
+            r"sha256:[0-9a-fA-F]{64}", content_hash
+        ):
+            raise CoordinatorError(
+                "invalid_governance", "governance source hash is invalid"
+            )
+        normalized_relative_reference(source.get("snapshot_ref"), "governance.snapshot")
+        if not isinstance(source.get("required"), bool):
+            raise CoordinatorError(
+                "invalid_governance", "governance source required is boolean"
+            )
+
+
+def _governance_constraints(constraints: list) -> None:
+    identifiers = set()
+    controls = {f"permissions.{field}" for field in PERMISSION_FIELDS}
+    controls.update(f"policy.{field}" for field in POLICY_FIELDS)
+    fields = {
+        "id",
+        "kind",
+        "statement",
+        "applies_to",
+        "enforcement",
+        "controls",
+        "overridable",
+    }
+    for item in constraints:
+        constraint = strict_mapping(item, fields, "governance.constraint")
+        constraint_id = identifier(constraint.get("id"), "governance.constraint.id")
+        if constraint_id in identifiers:
+            raise CoordinatorError(
+                "invalid_governance", "governance constraint ids are unique"
+            )
+        identifiers.add(constraint_id)
+        if not all(
+            isinstance(constraint.get(field), str) and constraint[field].strip()
+            for field in ("kind", "statement", "enforcement")
+        ):
+            raise CoordinatorError(
+                "invalid_governance", "governance constraint is incomplete"
+            )
+        if not isinstance(constraint.get("applies_to"), list) or not all(
+            isinstance(item, str) and item for item in constraint["applies_to"]
+        ):
+            raise CoordinatorError(
+                "invalid_governance", "constraint applies_to is invalid"
+            )
+        if not isinstance(constraint.get("controls"), list) or not set(
+            constraint["controls"]
+        ).issubset(controls):
+            raise CoordinatorError(
+                "invalid_governance", "constraint controls are invalid"
+            )
+        if not isinstance(constraint.get("overridable"), bool):
+            raise CoordinatorError(
+                "invalid_governance", "constraint overridable is boolean"
+            )
 
 
 def profile_payload(value: object) -> dict:
@@ -243,9 +400,10 @@ def authority_reference(value: object) -> str:
             "invalid_question", "authority reference must be a non-empty string"
         )
     source, separator, reference = value.partition(":")
-    if not separator or source not in {"state", "rules"} or not reference:
+    if not separator or source not in {"state", "rules", "governance"} or not reference:
         raise CoordinatorError(
-            "invalid_question", "authority reference must name state or rules"
+            "invalid_question",
+            "authority reference must name state, rules, or governance",
         )
     if source == "rules":
         normalized_relative_reference(reference, "question.authority_reference")
@@ -294,7 +452,9 @@ def integration_gate(value: object) -> dict:
         value, {"id", "status", "evidence", "extra"}, "integration_gate"
     )
     if not set(data) <= {"id", "status", "evidence", "extra"} or not {
-        "id", "status", "evidence"
+        "id",
+        "status",
+        "evidence",
     } <= set(data):
         raise CoordinatorError(
             "invalid_gate", "integration gate records require id, status, and evidence"
@@ -316,6 +476,8 @@ def activation_payload(payload: object) -> dict:
         {
             "goal_id",
             "title",
+            "goal",
+            "governance",
             "template",
             "profile",
             "routes",
@@ -332,11 +494,29 @@ def activation_payload(payload: object) -> dict:
     identifier(data.get("goal_id"), "goal_id")
     if not isinstance(data.get("title"), str) or not data["title"].strip():
         raise CoordinatorError("invalid_title", "title must be a non-empty string")
+    data["goal"] = goal_payload(
+        data.get(
+            "goal",
+            {
+                "objective": data["title"],
+                "success_criteria": [
+                    {
+                        "id": "completion-contract",
+                        "description": "Satisfy the declared completion contract.",
+                        "verification": "coordinator validation",
+                    }
+                ],
+            },
+        )
+    )
+    data["governance"] = governance_payload(
+        data.get("governance", {"sources": [], "constraints": []})
+    )
     _template(data.get("template"))
     _profile(data.get("profile"))
     data["routes"] = _routes(data.get("routes"))
-    permissions = data.get("permissions")
-    permission_scope(permissions)
+    permissions = permission_scope(data.get("permissions"))
+    data["permissions"] = permissions
     repositories = data.get("repositories")
     if (
         not isinstance(repositories, list)
@@ -360,7 +540,8 @@ def activation_payload(payload: object) -> dict:
             "invalid_binding", "one non-empty completion contract is required"
         )
     json_value(contracts[0], "activation.contract")
-    _policy(data.get("policy", {}))
+    data["policy"] = normalized_policy(data.get("policy", {}))
+    validate_authority(permissions, data["policy"])
     if "extra" in data:
         data["extra"] = extra_metadata(data["extra"], "activation.extra")
     return data
@@ -380,6 +561,7 @@ def validate_state(state: object) -> dict:
     from .state_validation import validate_state as validate
 
     return validate(state)
+
 
 __all__ = [
     "activation_payload",

@@ -13,11 +13,8 @@ unsupported versions, invalid graph edges, permission broadening, illegal
 transitions, and stale evidence are rejected. A checkpoint always contains an
 exact next action.
 
-The ledger records intent and evidence only. Hermes remains responsible for
-repository inspection, selecting a worktree, launching OpenCode, handling
-GitHub, sending notifications, asking a human, and executing or authorizing a
-merge. The ledger must never import or invoke those systems, a network client,
-tmux, a subprocess, or a notification sender.
+The ledger records intent and evidence only. Hermes performs repository,
+worker, external-service, notification, and merge actions; the ledger invokes none.
 
 ## Workflow
 
@@ -31,6 +28,12 @@ worktree, command reference, expected and observed evidence, lifecycle status,
 question status, and checkpoint. A run's model, reasoning level, and agent
 must match its role's route.
 
+Schema v2 stores root semantics in `config.goal` and child semantics in
+`state.goal_graph`. Fixed permission booleans control execution: PR requires
+push, push requires commit, and merge requires a PR. Policy never grants
+authority (`policy.merge` is invalid). `config.governance` only preserves rule
+provenance or narrows controls; governance and `extra` cannot grant permission.
+
 Goals may contain other goals recursively. Dependencies are separate directed
 edges: they block readiness but do not imply ownership. Child policy inherits
 from its parent and may narrow authority, never broaden it. Review evidence is
@@ -38,18 +41,14 @@ bound to head, base, and diff; any drift invalidates it. Questions answered by
 approved state or rules resume the same session; scope, credentials, policy,
 external approval, and merge questions become `needs_user`.
 
-Completion requires all required children, dependencies, integration gates,
-final verification, and discovered-work dispositions to be resolved. Merge is
-always a separately authorized external action.
+Completion requires resolved children, dependencies, gates, verification, and
+discovered work. Merge remains a separately authorized external action.
 
 ## Bounded operation
 
-Use isolated `HERMES_HOME` when testing or developing a workflow.
-Activation creates the goal directory; provide the activation fields in one
-request. Use reasoned, revision-checked `amend_config` or `amend_state` for a validated
-in-place correction; `extra` is a secret-free JSON object for opaque metadata.
-Phase route snapshots remain historical when routes are amended. Do not copy a
-repository template into the goal directory.
+Use isolated `HERMES_HOME` when testing. Activation creates the goal directory.
+Use reasoned, revision-checked `amend_config` or `amend_state`; `extra` is
+secret-free opaque JSON. Route snapshots remain historical after amendments.
 
 Every later mutation names the goal and supplies the revision it observed.
 Read `status` or `next` again after a revision conflict; never retry a stale

@@ -50,7 +50,13 @@ def activation(goal_id="demo", *, merge=False):
             "reviewer": {"model": "model", "reasoning": "high", "agent": "opencode"},
             "worker": {"model": "model", "reasoning": "high", "agent": "opencode"},
         },
-        "permissions": {"implement": True, "merge": merge},
+        "permissions": {
+            "implement": True,
+            "commit": merge,
+            "push": merge,
+            "create_pr": merge,
+            "merge": merge,
+        },
         "policy": {"merge": merge},
         "repositories": ["org/demo"],
         "source_bindings": {"issue": "#1", "spec": "#4"},
@@ -68,7 +74,8 @@ def running_phase(goal_id="demo", revision=1):
             "work_item_id": goal_id,
             "worker_role": "planner",
             "model": "model",
-            "reasoning": "high", "agent": "opencode",
+            "reasoning": "high",
+            "agent": "opencode",
             "session_id": "s",
             "process_id": "p",
             "command": "plan",
@@ -179,7 +186,7 @@ def test_unsupported_state_version_is_not_migrated(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(activation())
     store = status("demo")
-    assert store["state"]["schema_version"] == 1
+    assert store["state"]["schema_version"] == 2
     from hermes_devlog.store import StateStore
 
     path = StateStore.from_goal("demo").state_path
@@ -249,7 +256,8 @@ def test_service_rejects_invalid_graphs_and_records_workflow(tmp_path, monkeypat
         "work_item_id": "demo",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",

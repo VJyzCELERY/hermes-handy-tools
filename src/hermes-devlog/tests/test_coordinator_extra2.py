@@ -71,7 +71,8 @@ def running_phase(goal_id, revision=1):
             "work_item_id": goal_id,
             "worker_role": "planner",
             "model": "model",
-            "reasoning": "high", "agent": "opencode",
+            "reasoning": "high",
+            "agent": "opencode",
             "session_id": "s",
             "process_id": "p",
             "command": "plan",
@@ -95,7 +96,8 @@ def test_phase_run_question_escalation_updates_active_session(tmp_path, monkeypa
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s1",
         "process_id": "p1",
         "command": "plan",
@@ -126,7 +128,8 @@ def test_completed_phase_cannot_leave_question_unresolved(tmp_path, monkeypatch)
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s1",
         "process_id": "p1",
         "command": "plan",
@@ -153,7 +156,8 @@ def test_question_requires_running_session(tmp_path, monkeypatch, session_id):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "running",
         "process_id": "p",
         "command": "plan",
@@ -220,9 +224,9 @@ def test_child_goal_inherits_scope_bindings(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(payload())
 
-    child = add_goal("demo-goal", {"id": "child", "title": "Child"}, 1)[
-        "state"
-    ]["goal_graph"]["nodes"]["child"]
+    child = add_goal("demo-goal", {"id": "child", "title": "Child"}, 1)["state"][
+        "goal_graph"
+    ]["nodes"]["child"]
 
     assert child["repositories"] == payload()["repositories"]
     assert child["source_bindings"] == payload()["source_bindings"]
@@ -273,7 +277,7 @@ def test_goal_and_dependency_errors_are_structured(tmp_path, monkeypatch):
     activate(payload())
     with pytest.raises(CoordinatorError) as error:
         add_goal("demo-goal", {"id": "child", "title": "Child", "policy": []}, 1)
-    assert error.value.code == "invalid_object"
+    assert error.value.code == "invalid_policy"
     with pytest.raises(CoordinatorError) as error:
         add_dependency("demo-goal", "missing", "demo-goal", 1)
     assert error.value.code == "missing_goal"
@@ -282,9 +286,7 @@ def test_goal_and_dependency_errors_are_structured(tmp_path, monkeypatch):
     assert error.value.code == "missing_goal"
 
 
-def test_scheduler_requires_expected_revision(
-    tmp_path, monkeypatch
-):
+def test_scheduler_requires_expected_revision(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(payload())
     store = StateStore.from_goal("demo-goal")
@@ -292,8 +294,7 @@ def test_scheduler_requires_expected_revision(
         activate(payload())
     assert error.value.code == "already_exists"
     assert (
-        store.set_next_action("resume", expected_revision=1)["next_action"]
-        == "resume"
+        store.set_next_action("resume", expected_revision=1)["next_action"] == "resume"
     )
     assert store.set_next_action("resume", expected_revision=2)["revision"] == 3
     before = store.read()
@@ -338,13 +339,12 @@ def test_root_blocker_dependency_is_rejected(tmp_path, monkeypatch):
     assert store.activity_path.read_text() == activity_before
 
 
-
-
 def test_required_workflow_phases_are_enforced(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     data = payload()
-    data["permissions"]["merge"] = True
-    data["policy"] = {"merge": True}
+    data["permissions"].update(
+        {"commit": True, "push": True, "create_pr": True, "merge": True}
+    )
     activate(data)
     phase_data = {
         "phase": "plan",
@@ -353,7 +353,8 @@ def test_required_workflow_phases_are_enforced(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -402,7 +403,8 @@ def test_phase_requires_pinned_route(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "other-model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -433,7 +435,8 @@ def test_completed_phase_releases_capacity(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -521,9 +524,7 @@ def test_concurrent_mutation_allows_one_revision_winner(tmp_path, monkeypatch):
     assert sorted(outcomes) == ["ok", "revision_conflict"]
     state = StateStore.from_goal("demo-goal").read()
     assert state["revision"] == 2
-    assert (
-        len(StateStore.from_goal("demo-goal").audit_list()) == 2
-    )
+    assert len(StateStore.from_goal("demo-goal").audit_list()) == 2
 
 
 def test_store_rejects_malformed_config(tmp_path, monkeypatch):
@@ -584,7 +585,8 @@ def test_cli_dispatches_remaining_operations(tmp_path, monkeypatch, capsys):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",

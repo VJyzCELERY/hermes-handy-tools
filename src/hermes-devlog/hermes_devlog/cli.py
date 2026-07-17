@@ -39,6 +39,8 @@ def _dispatch(operation: str, payload: dict) -> dict:
         "activate": {
             "goal_id",
             "title",
+            "goal",
+            "governance",
             "template",
             "profile",
             "routes",

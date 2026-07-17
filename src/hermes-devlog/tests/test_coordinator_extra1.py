@@ -70,7 +70,8 @@ def running_phase(goal_id, revision=1):
             "work_item_id": goal_id,
             "worker_role": "planner",
             "model": "model",
-            "reasoning": "high", "agent": "opencode",
+            "reasoning": "high",
+            "agent": "opencode",
             "session_id": "s",
             "process_id": "p",
             "command": "plan",
@@ -149,7 +150,8 @@ def test_phase_run_identity_is_required_and_persisted(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -172,8 +174,9 @@ def test_completion_requires_implementation_review_after_remediation(
 ):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     data = payload()
-    data["permissions"]["merge"] = True
-    data["policy"] = {"merge": True}
+    data["permissions"].update(
+        {"commit": True, "push": True, "create_pr": True, "merge": True}
+    )
     activate(data)
     phase_data = {
         "phase": "plan",
@@ -182,7 +185,8 @@ def test_completion_requires_implementation_review_after_remediation(
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -250,7 +254,8 @@ def test_active_phase_runs_respect_capacity(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s1",
         "process_id": "p1",
         "command": "plan",
@@ -286,7 +291,8 @@ def test_active_phase_runs_block_same_work_item_advance(tmp_path, monkeypatch):
                 "work_item_id": "demo-goal",
                 "worker_role": "planner",
                 "model": "model",
-                "reasoning": "high", "agent": "opencode",
+                "reasoning": "high",
+                "agent": "opencode",
                 "session_id": "s2",
                 "process_id": "p2",
                 "command": "plan",
@@ -304,8 +310,9 @@ def test_active_phase_runs_block_same_work_item_advance(tmp_path, monkeypatch):
 def test_active_phase_runs_block_completion(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     data = payload()
-    data["permissions"]["merge"] = True
-    data["policy"] = {"merge": True}
+    data["permissions"].update(
+        {"commit": True, "push": True, "create_pr": True, "merge": True}
+    )
     activate(data)
     add_goal("demo-goal", {"id": "child", "title": "Child"}, 1)
     set_goal_disposition("demo-goal", "child", "resolved", 2)
@@ -317,7 +324,8 @@ def test_active_phase_runs_block_completion(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "root-session",
         "process_id": "root-process",
         "command": "plan",
@@ -385,8 +393,9 @@ def test_active_phase_runs_block_completion(tmp_path, monkeypatch):
 def test_completion_requires_remediation_after_review_findings(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     data = payload()
-    data["permissions"]["merge"] = True
-    data["policy"] = {"merge": True}
+    data["permissions"].update(
+        {"commit": True, "push": True, "create_pr": True, "merge": True}
+    )
     activate(data)
     phase_data = {
         "phase": "plan",
@@ -395,7 +404,8 @@ def test_completion_requires_remediation_after_review_findings(tmp_path, monkeyp
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -476,7 +486,8 @@ def test_phase_status_releases_and_enforces_capacity(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s1",
         "process_id": "p1",
         "command": "plan",
@@ -506,7 +517,8 @@ def test_phase_run_persists_question_status(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "reasoning": "high", "agent": "opencode",
+        "reasoning": "high",
+        "agent": "opencode",
         "session_id": "s1",
         "process_id": "p1",
         "command": "plan",
