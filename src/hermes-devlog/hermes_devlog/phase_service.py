@@ -96,6 +96,10 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
         raise CoordinatorError(
             "invalid_phase_run", "unsupported phase run question status"
         )
+    if phase_status == "completed" and question_status == "needs_user":
+        raise CoordinatorError(
+            "question_unresolved", "completed phase run cannot await a question"
+        )
     phases = [
         "issue",
         "plan",

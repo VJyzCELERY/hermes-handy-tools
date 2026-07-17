@@ -112,7 +112,12 @@ def question(goal_id: str, data: Mapping, revision: int) -> dict:
             question_class in SENSITIVE_QUESTION_CLASSES
             or inferred_class in SENSITIVE_QUESTION_CLASSES
         )
-        approved = "authority_reference" in data and not sensitive
+        config = _store(goal_id).read_config()
+        approved = (
+            "authority_reference" in data
+            and not sensitive
+            and _authority_is_verified(data["authority_reference"], state, config)
+        )
         escalated = (
             not approved
             or bool(data.get("escalate"))
@@ -123,6 +128,8 @@ def question(goal_id: str, data: Mapping, revision: int) -> dict:
             "question_class": question_class,
             "status": "needs_user" if escalated else "answered",
         }
+        if "authority_reference" in data and not approved:
+            item["escalate"] = True
         state["questions"].append(item)
         for run in state["phase_runs"]:
             if run["session_id"] == data["session_id"] and run["status"] == "running":
@@ -317,6 +324,19 @@ def complete(goal_id: str, revision: int) -> dict:
         ):
             raise CoordinatorError(
                 "active_phase_run", "completion requires all phase runs to finish"
+            )
+        if any(
+            run.get("question_status") == "needs_user"
+            for run in state["phase_runs"]
+            if isinstance(run, Mapping)
+        ) or any(
+            item.get("status") == "needs_user"
+            for item in state["questions"]
+            if isinstance(item, Mapping)
+        ):
+            raise CoordinatorError(
+                "question_unresolved",
+                "completion requires all questions to be resolved",
             )
         required_phases = {
             "plan",

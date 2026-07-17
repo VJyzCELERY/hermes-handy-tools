@@ -16,6 +16,7 @@ SECRET_PATTERNS = (
     re.compile(r"(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{20,}"),
     re.compile(r"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}(?![A-Za-z0-9])"),
     re.compile(r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+"),
+    re.compile(r"(?i)-----begin [a-z0-9 ]*private key-----"),
 )
 PHASES = {
     "issue",

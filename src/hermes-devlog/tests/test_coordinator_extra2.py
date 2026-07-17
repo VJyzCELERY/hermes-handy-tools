@@ -111,6 +111,32 @@ def test_phase_run_question_escalation_updates_active_session(tmp_path, monkeypa
     assert result["state"]["phase_runs"][-1]["question_status"] == "needs_user"
 
 
+def test_completed_phase_cannot_leave_question_unresolved(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    phase_data = {
+        "phase": "plan",
+        "attempt": 1,
+        "owner": "planner",
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "s1",
+        "process_id": "p1",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "plan",
+        "status": "completed",
+        "question_status": "needs_user",
+    }
+
+    with pytest.raises(CoordinatorError):
+        phase("demo-goal", phase_data, 1)
+
+
 @pytest.mark.parametrize("session_id", ["missing", "finished"])
 def test_question_requires_running_session(tmp_path, monkeypatch, session_id):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))

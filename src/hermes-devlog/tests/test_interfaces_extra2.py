@@ -234,6 +234,39 @@ def test_unclassified_question_without_authority_reference_requires_user(
     assert result["state"]["questions"][-1]["status"] == "needs_user"
 
 
+def test_unclassified_question_requires_verified_authority_reference(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    running_phase()
+
+    result = question(
+        "demo",
+        {
+            "session_id": "s",
+            "question": "Can I continue?",
+            "answer": "yes",
+            "authority_reference": "state:invented",
+        },
+        2,
+    )
+
+    assert result["state"]["questions"][-1]["status"] == "needs_user"
+    assert result["state"]["phase_runs"][0]["question_status"] == "needs_user"
+
+
+def test_activation_rejects_pem_private_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    data = activation()
+    data["source_bindings"]["evidence"] = (
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nkey"
+    )
+
+    with pytest.raises(CoordinatorError):
+        activate(data)
+
+
 @pytest.mark.parametrize("authority_reference", ["rules:invented.md", "state:invented"])
 def test_unverified_authority_reference_keeps_sensitive_question_pending(
     tmp_path, monkeypatch, authority_reference
