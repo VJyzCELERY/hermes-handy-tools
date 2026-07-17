@@ -15,3 +15,4 @@ The `src/` folder contains subprojects — modular components of the MAIN-PROJEC
 | Subproject | Description |
 |------------|-------------|
 | [opencode-tool](opencode-tool/) | Python CLI for OpenCode server management |
+| [hermes-devlog](hermes-devlog/) | Local Hermes development ledger |

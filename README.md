@@ -7,6 +7,7 @@ A collection of useful CLI tools and utilities for Hermes Agent workflows.
 | Tool | Description | Install |
 |------|-------------|---------|
 | [opencode-tool](src/opencode-tool/) | Python CLI for OpenCode server management | See [README](src/opencode-tool/README.md) |
+| [hermes-devlog](src/hermes-devlog/) | Local Hermes development ledger | See [README](src/hermes-devlog/README.md) |
 
 ## How To Install
 

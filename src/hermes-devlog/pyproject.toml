@@ -1,0 +1,36 @@
+[project]
+name = "hermes-devlog"
+version = "0.1.0"
+description = "A local, side-effect-free Hermes development ledger"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=7", "pytest-cov>=4", "radon>=6", "ruff>=0.6"]
+
+[project.scripts]
+hermes-devlog = "hermes_devlog.cli:main"
+
+[project.entry-points."hermes_agent.plugins"]
+hermes-devlog = "hermes_devlog.plugin"
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "S", "PTH", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S105"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hermes_devlog*"]
