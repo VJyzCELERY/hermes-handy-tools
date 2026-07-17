@@ -395,11 +395,21 @@ def complete(goal_id: str, revision: int) -> dict:
         )
         if root_id is None or any(
             node.get("disposition") not in TERMINAL_DISPOSITIONS
+            or (
+                node.get("disposition") == "resolved"
+                and not required_phases <= {
+                    run["phase"]
+                    for run in state["phase_runs"]
+                    if run["work_item_id"] == node_id
+                    and run["status"] == "completed"
+                }
+            )
             for node_id, node in nodes.items()
             if node_id != root_id
         ):
             raise CoordinatorError(
-                "incomplete_children", "all contained goals must be terminal"
+                "incomplete_children",
+                "resolved contained goals need terminal workflow evidence",
             )
         if any(
             nodes[edge["blocker"]].get("disposition") not in TERMINAL_DISPOSITIONS

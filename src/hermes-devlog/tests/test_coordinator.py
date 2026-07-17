@@ -569,8 +569,9 @@ def test_completion_requires_clean_review_children_and_dependencies(
     phase_data.update({"phase": "final_verification", "attempt": 8})
     phase("demo-goal", phase_data, 12)
     gate("demo-goal", "final_verification", True, 13)
+    set_goal_disposition("demo-goal", "child", "resolved", 14)
     with pytest.raises(CoordinatorError) as error:
-        complete("demo-goal", 14)
+        complete("demo-goal", 15)
     assert error.value.code == "incomplete_children"
     assert StateStore.from_goal("demo-goal").read()["completion"]["terminal"] is False
 
