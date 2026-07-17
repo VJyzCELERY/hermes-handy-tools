@@ -188,6 +188,22 @@ def normalized_policy(value: object) -> dict:
     }
 
 
+def permission_scope(value: object) -> dict:
+    """Validate one effective boolean permission scope."""
+    if (
+        not isinstance(value, Mapping)
+        or not value
+        or not all(
+            isinstance(key, str) and isinstance(item, bool)
+            for key, item in value.items()
+        )
+    ):
+        raise CoordinatorError(
+            "invalid_permissions", "permissions must be a non-empty boolean object"
+        )
+    return dict(value)
+
+
 def profile_payload(value: object) -> dict:
     """Validate and return one complete workflow profile."""
     return _profile(value)
@@ -290,17 +306,7 @@ def activation_payload(payload: object) -> dict:
     _profile(data.get("profile"))
     _route(data.get("route"))
     permissions = data.get("permissions")
-    if (
-        not isinstance(permissions, Mapping)
-        or not permissions
-        or not all(
-            isinstance(key, str) and isinstance(item, bool)
-            for key, item in permissions.items()
-        )
-    ):
-        raise CoordinatorError(
-            "invalid_permissions", "permissions must be a non-empty boolean object"
-        )
+    permission_scope(permissions)
     repositories = data.get("repositories")
     if (
         not isinstance(repositories, list)

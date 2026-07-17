@@ -37,6 +37,11 @@ class StateStore:
 
     def read(self) -> dict:
         """Read and validate the supported state version."""
+        with self.locked():
+            return self._read_unlocked()
+
+    def _read_unlocked(self) -> dict:
+        """Read state while the caller holds the per-goal lock."""
         try:
             state = json.loads(self.state_path.read_text())
         except FileNotFoundError as exc:
@@ -125,7 +130,7 @@ class StateStore:
         """Apply one revision-checked atomic state mutation."""
         expected = expected_revision(revision)
         with self.locked():
-            state = self.read()
+            state = self._read_unlocked()
             if state["revision"] != expected:
                 raise CoordinatorError(
                     "revision_conflict",

@@ -13,6 +13,7 @@ from .validation import (
     identifier,
     json_value,
     normalized_policy,
+    permission_scope,
     profile_payload,
     reject_secrets,
 )
@@ -46,6 +47,7 @@ def _validate_goal_fields(data: dict) -> None:
         "title",
         "parent_id",
         "profile",
+        "permissions",
         "repositories",
         "source_bindings",
         "completion_contract",
@@ -61,6 +63,8 @@ def _validate_goal_fields(data: dict) -> None:
         *TERMINAL_DISPOSITIONS,
     }:
         raise CoordinatorError("invalid_goal", "unsupported goal disposition")
+    if "permissions" in data:
+        permission_scope(data["permissions"])
     _validate_goal_bindings(data)
 
 
@@ -108,6 +112,7 @@ def _apply_goal(state: dict, goal_id: str, data: dict, child_id: str) -> dict:
     parent_policy = dict(state.get("policy", {}))
     parent_policy.update(parent.get("policy", {}))
     parent_profile = parent["profile"]
+    parent_permissions = parent["permissions"]
     child_profile = profile_payload(data.get("profile", parent_profile))
     if (
         PROFILE_MATCH_RANK[child_profile["match"]]
@@ -118,6 +123,9 @@ def _apply_goal(state: dict, goal_id: str, data: dict, child_id: str) -> dict:
             "profile_broadening", "child profile cannot broaden parent profile"
         )
     child_policy = _narrow_policy(data.get("policy", {}), parent_policy)
+    child_permissions = _narrow_permissions(
+        data.get("permissions", {}), parent_permissions
+    )
     node_copy = deepcopy(data)
     node_copy.update(
         {
@@ -125,6 +133,7 @@ def _apply_goal(state: dict, goal_id: str, data: dict, child_id: str) -> dict:
             "parent_id": parent_id,
             "disposition": data.get("disposition", "open"),
             "policy": {**parent_policy, **child_policy},
+            "permissions": child_permissions,
             "profile": child_profile,
         }
     )
@@ -134,6 +143,27 @@ def _apply_goal(state: dict, goal_id: str, data: dict, child_id: str) -> dict:
         "next_action": f"begin_child:{child_id}",
     }
     return state
+
+
+def _narrow_permissions(child_permissions: object, parent_permissions: dict) -> dict:
+    requested = (
+        permission_scope(child_permissions) if child_permissions else {}
+    )
+    if set(requested) - set(parent_permissions):
+        raise CoordinatorError(
+            "permission_broadening", "child permissions must be inherited"
+        )
+    if any(
+        value and not parent_permissions[permission]
+        for permission, value in requested.items()
+    ):
+        raise CoordinatorError(
+            "permission_broadening", "child permissions cannot broaden authority"
+        )
+    return {
+        permission: allowed and requested.get(permission, True)
+        for permission, allowed in parent_permissions.items()
+    }
 
 
 def _narrow_policy(child_policy: object, parent_policy: dict) -> dict:

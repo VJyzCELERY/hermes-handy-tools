@@ -16,6 +16,7 @@ from .validation import (
     json_value,
     normalized_absolute_path,
     normalized_policy,
+    permission_scope,
     profile_payload,
     review_identity,
     strict_mapping,
@@ -39,6 +40,17 @@ def _validate_goal_graph(graph: object) -> dict:
         for node in nodes.values()
     ):
         raise CoordinatorError("invalid_state", "goal parent is missing")
+    for node in nodes.values():
+        parent_id = node.get("parent_id")
+        if parent_id is not None:
+            parent_permissions = nodes[parent_id]["permissions"]
+            if set(node["permissions"]) != set(parent_permissions) or any(
+                value and not parent_permissions[key]
+                for key, value in node["permissions"].items()
+            ):
+                raise CoordinatorError(
+                    "invalid_state", "child permissions broaden parent authority"
+                )
     _validate_acyclic(
         {
             node_id: [node["parent_id"]] if node["parent_id"] else []
@@ -59,6 +71,7 @@ def _validate_goal_node(node_id: object, value: object) -> None:
             "title",
             "parent_id",
             "profile",
+            "permissions",
             "repositories",
             "source_bindings",
             "completion_contract",
@@ -73,6 +86,7 @@ def _validate_goal_node(node_id: object, value: object) -> None:
         "title",
         "parent_id",
         "profile",
+        "permissions",
         "disposition",
         "policy",
     } <= set(node):
@@ -91,6 +105,7 @@ def _validate_goal_node(node_id: object, value: object) -> None:
     }:
         raise CoordinatorError("invalid_state", "goal disposition is unsupported")
     _policy(node["policy"])
+    permission_scope(node["permissions"])
     profile_payload(node["profile"])
     if "repositories" in node and (
         not isinstance(node["repositories"], list)

@@ -3,6 +3,7 @@ import copy
 import json
 import os
 from multiprocessing import get_context
+from queue import Empty
 
 import pytest
 
@@ -31,6 +32,36 @@ def _race_mutation(home, results):
         results.put(error.code)
     else:
         results.put("ok")
+
+
+def _blocked_mutation(home, replaced, release, results):
+    os.environ["HERMES_HOME"] = str(home)
+    store = StateStore.from_goal("demo-goal")
+    original_activity = StateStore._activity
+
+    def block_activity(self, *args, **kwargs):
+        replaced.set()
+        release.wait(2)
+        return original_activity(self, *args, **kwargs)
+
+    StateStore._activity = block_activity
+    try:
+        store.set_next_action("race", 1)
+    except Exception as error:  # pragma: no cover - child-process reporting
+        results.put(("writer_error", type(error).__name__))
+    else:
+        results.put(("writer", "ok"))
+
+
+def _read_during_mutation(home, started, done, results):
+    os.environ["HERMES_HOME"] = str(home)
+    started.set()
+    try:
+        results.put(("reader", StateStore.from_goal("demo-goal").read()["revision"]))
+    except CoordinatorError as error:
+        results.put(("reader_error", error.code))
+    finally:
+        done.set()
 
 
 def template():
@@ -199,6 +230,49 @@ def test_implementation_requires_permission(tmp_path, monkeypatch):
 
     with pytest.raises(CoordinatorError) as error:
         phase("demo-goal", {**phase_data, "phase": "implement", "attempt": 3}, 3)
+
+    assert error.value.code == "implementation_not_authorized"
+    assert StateStore.from_goal("demo-goal").read() == before
+
+
+def test_child_implementation_permission_narrows(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    add_goal(
+        "demo-goal",
+        {"id": "child", "title": "Child", "permissions": {"implement": False}},
+        1,
+    )
+    phase_data = {
+        "phase": "plan",
+        "owner": "planner",
+        "attempt": 1,
+        "work_item_id": "child",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "child-session",
+        "process_id": "child-process",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "plan_review",
+    }
+    phase("demo-goal", phase_data, 2)
+    phase(
+        "demo-goal",
+        {**phase_data, "phase": "plan_review", "attempt": 2},
+        3,
+    )
+    before = StateStore.from_goal("demo-goal").read()
+
+    with pytest.raises(CoordinatorError) as error:
+        phase(
+            "demo-goal",
+            {**phase_data, "phase": "implement", "attempt": 3},
+            4,
+        )
 
     assert error.value.code == "implementation_not_authorized"
     assert StateStore.from_goal("demo-goal").read() == before
@@ -448,3 +522,36 @@ def test_failed_mutation_activity_append_rolls_back(tmp_path, monkeypatch):
 
     assert store.state_path.read_bytes() == state_before
     assert store.activity_path.read_bytes() == activity_before
+
+
+def test_concurrent_read_returns_consistent_ledger(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    context = get_context("fork")
+    replaced = context.Event()
+    release = context.Event()
+    started = context.Event()
+    done = context.Event()
+    results = context.Queue()
+    writer = context.Process(
+        target=_blocked_mutation,
+        args=(tmp_path, replaced, release, results),
+    )
+    reader = context.Process(
+        target=_read_during_mutation,
+        args=(tmp_path, started, done, results),
+    )
+    writer.start()
+    assert replaced.wait(2)
+    reader.start()
+    assert started.wait(2)
+    assert not done.wait(0.2)
+    release.set()
+    writer.join(2)
+    reader.join(2)
+    assert not writer.is_alive()
+    assert not reader.is_alive()
+    assert results.get(timeout=2) == ("writer", "ok")
+    assert results.get(timeout=2) == ("reader", 2)
+    with pytest.raises(Empty):
+        results.get_nowait()

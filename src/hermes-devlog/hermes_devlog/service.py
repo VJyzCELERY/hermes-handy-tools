@@ -66,6 +66,7 @@ def activate(payload: Mapping) -> dict:
                     "title": data["title"],
                     "parent_id": None,
                     "profile": deepcopy(data["profile"]),
+                    "permissions": deepcopy(data["permissions"]),
                     "repositories": deepcopy(data["repositories"]),
                     "source_bindings": deepcopy(data["source_bindings"]),
                     contract_field: deepcopy(data[contract_field]),

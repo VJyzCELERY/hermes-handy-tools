@@ -154,9 +154,9 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
             raise CoordinatorError(
                 "invalid_transition", f"cannot move from {current} to {target}"
             )
-        if target in {"implement", "remediation"} and not config["permissions"].get(
-            "implement", False
-        ):
+        if target in {"implement", "remediation"} and not state["goal_graph"][
+            "nodes"
+        ][data["work_item_id"]]["permissions"].get("implement", False):
             raise CoordinatorError(
                 "implementation_not_authorized",
                 "implementation permission is required",
