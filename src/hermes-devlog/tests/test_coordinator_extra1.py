@@ -188,7 +188,15 @@ def test_completion_requires_implementation_review_after_remediation(
         "next_action": "implement",
     }
     phase("demo-goal", phase_data, 1)
-    phase_data.update({"phase": "plan_review", "attempt": 2})
+    phase_data.update(
+        {
+            "phase": "plan_review",
+            "attempt": 2,
+            "worker_role": "reviewer",
+            "session_id": "plan-review-session",
+            "process_id": "plan-review-process",
+        }
+    )
     phase("demo-goal", phase_data, 2)
     phase_data.update({"phase": "implement", "attempt": 3})
     phase("demo-goal", phase_data, 3)
@@ -325,10 +333,18 @@ def test_active_phase_runs_block_completion(tmp_path, monkeypatch):
                 **(
                     {
                         "worker_role": "reviewer",
-                        "session_id": "review-session",
-                        "process_id": "review-process",
+                        "session_id": (
+                            "plan-review-session"
+                            if phase_name == "plan_review"
+                            else "review-session"
+                        ),
+                        "process_id": (
+                            "plan-review-process"
+                            if phase_name == "plan_review"
+                            else "review-process"
+                        ),
                     }
-                    if phase_name == "implementation_review"
+                    if phase_name in {"plan_review", "implementation_review"}
                     else {}
                 ),
             }
@@ -385,7 +401,15 @@ def test_completion_requires_remediation_after_review_findings(tmp_path, monkeyp
         "next_action": "implement",
     }
     phase("demo-goal", phase_data, 1)
-    phase_data.update({"phase": "plan_review", "attempt": 2})
+    phase_data.update(
+        {
+            "phase": "plan_review",
+            "attempt": 2,
+            "worker_role": "reviewer",
+            "session_id": "plan-review-session",
+            "process_id": "plan-review-process",
+        }
+    )
     phase("demo-goal", phase_data, 2)
     phase_data.update({"phase": "implement", "attempt": 3})
     phase("demo-goal", phase_data, 3)

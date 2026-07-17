@@ -90,6 +90,48 @@ def test_cli_and_custom_tool_have_equivalent_activation(tmp_path, monkeypatch, c
     assert tool_result["state"]["phase"] == cli_result["state"]["phase"]
 
 
+@pytest.mark.parametrize(
+    "worker_role,session_id", [("planner", "s"), ("reviewer", "s")]
+)
+def test_plan_review_requires_isolated_reviewer(
+    tmp_path, monkeypatch, worker_role, session_id
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    phase_data = {
+        "phase": "plan",
+        "owner": "planner",
+        "attempt": 1,
+        "work_item_id": "demo",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "s",
+        "process_id": "p",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "plan-review",
+    }
+    phase("demo", phase_data, 1)
+
+    with pytest.raises(CoordinatorError) as error:
+        phase(
+            "demo",
+            {
+                **phase_data,
+                "phase": "plan_review",
+                "attempt": 2,
+                "worker_role": worker_role,
+                "session_id": session_id,
+            },
+            2,
+        )
+
+    assert error.value.code == "invalid_phase_run"
+
+
 def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(activation(merge=True))
@@ -110,7 +152,15 @@ def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
         "next_action": "implement",
     }
     phase("demo", phase_data, 1)
-    phase_data.update({"phase": "plan_review", "attempt": 2})
+    phase_data.update(
+        {
+            "phase": "plan_review",
+            "attempt": 2,
+            "worker_role": "reviewer",
+            "session_id": "plan-review-session",
+            "process_id": "plan-review-process",
+        }
+    )
     phase("demo", phase_data, 2)
     phase_data.update({"phase": "implement", "attempt": 3})
     phase_data["next_action"] = "implementation_review"

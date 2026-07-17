@@ -293,10 +293,18 @@ def test_required_workflow_phases_are_enforced(tmp_path, monkeypatch):
             **(
                 {
                     "worker_role": "reviewer",
-                    "session_id": "review-session",
-                    "process_id": "review-process",
+                    "session_id": (
+                        "plan-review-session"
+                        if phase_name == "plan_review"
+                        else "review-session"
+                    ),
+                    "process_id": (
+                        "plan-review-process"
+                        if phase_name == "plan_review"
+                        else "review-process"
+                    ),
                 }
-                if phase_name == "implementation_review"
+                if phase_name in {"plan_review", "implementation_review"}
                 else {}
             ),
         }

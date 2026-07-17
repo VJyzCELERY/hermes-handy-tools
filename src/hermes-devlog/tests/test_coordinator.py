@@ -203,8 +203,20 @@ def test_implementation_review_rejects_builder_session(tmp_path, monkeypatch):
         "observed_evidence": "e",
         "next_action": "next",
     }
-    for revision, phase_name in enumerate(("plan", "plan_review", "implement"), 1):
-        phase("demo-goal", {**run, "phase": phase_name, "attempt": revision}, revision)
+    phase("demo-goal", {**run, "phase": "plan", "attempt": 1}, 1)
+    phase(
+        "demo-goal",
+        {
+            **run,
+            "phase": "plan_review",
+            "attempt": 2,
+            "worker_role": "reviewer",
+            "session_id": "plan-review-session",
+            "process_id": "plan-review-process",
+        },
+        2,
+    )
+    phase("demo-goal", {**run, "phase": "implement", "attempt": 3}, 3)
 
     with pytest.raises(CoordinatorError):
         phase(
@@ -276,7 +288,14 @@ def test_implementation_requires_permission(tmp_path, monkeypatch):
     phase("demo-goal", phase_data, 1)
     phase(
         "demo-goal",
-        {**phase_data, "phase": "plan_review", "attempt": 2},
+        {
+            **phase_data,
+            "phase": "plan_review",
+            "attempt": 2,
+            "worker_role": "reviewer",
+            "session_id": "plan-review-session",
+            "process_id": "plan-review-process",
+        },
         2,
     )
     before = StateStore.from_goal("demo-goal").read()
@@ -315,7 +334,14 @@ def test_child_implementation_permission_narrows(tmp_path, monkeypatch):
     phase("demo-goal", phase_data, 2)
     phase(
         "demo-goal",
-        {**phase_data, "phase": "plan_review", "attempt": 2},
+        {
+            **phase_data,
+            "phase": "plan_review",
+            "attempt": 2,
+            "worker_role": "reviewer",
+            "session_id": "plan-review-session",
+            "process_id": "plan-review-process",
+        },
         3,
     )
     before = StateStore.from_goal("demo-goal").read()
@@ -441,7 +467,15 @@ def test_completion_requires_clean_review_children_and_dependencies(
         "next_action": "implement",
     }
     phase("demo-goal", phase_data, 3)
-    phase_data.update({"phase": "plan_review", "attempt": 2})
+    phase_data.update(
+        {
+            "phase": "plan_review",
+            "attempt": 2,
+            "worker_role": "reviewer",
+            "session_id": "plan-review-session",
+            "process_id": "plan-review-process",
+        }
+    )
     phase("demo-goal", phase_data, 4)
     phase_data.update({"phase": "implement", "attempt": 3})
     phase("demo-goal", phase_data, 5)
@@ -537,7 +571,15 @@ def test_merge_permission_gate(tmp_path, monkeypatch):
         "next_action": "implement",
     }
     phase("demo-goal", phase_data, 1)
-    phase_data.update({"phase": "plan_review", "attempt": 2})
+    phase_data.update(
+        {
+            "phase": "plan_review",
+            "attempt": 2,
+            "worker_role": "reviewer",
+            "session_id": "plan-review-session",
+            "process_id": "plan-review-process",
+        }
+    )
     phase("demo-goal", phase_data, 2)
     phase_data.update({"phase": "implement", "attempt": 3})
     phase("demo-goal", phase_data, 3)

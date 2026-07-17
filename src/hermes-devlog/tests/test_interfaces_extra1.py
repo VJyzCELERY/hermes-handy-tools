@@ -255,9 +255,25 @@ def test_service_rejects_invalid_graphs_and_records_workflow(tmp_path, monkeypat
         "next_action": "plan",
     }
     phase("demo", phase_data, 3)
-    phase_data.update({"phase": "plan_review", "attempt": 2})
+    phase_data.update(
+        {
+            "phase": "plan_review",
+            "attempt": 2,
+            "worker_role": "reviewer",
+            "session_id": "plan-review-session",
+            "process_id": "plan-review-process",
+        }
+    )
     phase("demo", phase_data, 4)
-    phase_data.update({"phase": "implement", "attempt": 3})
+    phase_data.update(
+        {
+            "phase": "implement",
+            "attempt": 3,
+            "worker_role": "planner",
+            "session_id": "s",
+            "process_id": "p",
+        }
+    )
     phase_data["next_action"] = "implement"
     phase_data["status"] = "running"
     phase("demo", phase_data, 5)
