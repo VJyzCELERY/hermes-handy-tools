@@ -18,12 +18,10 @@ SECRET_PATTERNS = (
     re.compile(r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+"),
     re.compile(r"(?i)-----begin [a-z0-9 ]*private key-----"),
 )
-SUPPORTED_HARNESSES = ("opencode",)
 WORKER_ROUTES = ("planner", "reviewer", "worker")
 PHASES = {
     "issue",
     "plan",
-    "plan_review",
     "implement",
     "implementation_review",
     "remediation",
@@ -156,14 +154,17 @@ def _profile(value: object) -> dict:
 
 
 def _route(value: object) -> dict:
-    route = strict_mapping(value, {"model", "variant"}, "route")
-    if set(route) != {"model", "variant"} or not all(
-        isinstance(item, str) and item for item in route.values()
+    route = strict_mapping(value, {"model", "reasoning", "agent"}, "route")
+    if not {"model", "reasoning"} <= set(route) or not all(
+        isinstance(route[field], str) and route[field]
+        for field in ("model", "reasoning")
     ):
         raise CoordinatorError(
             "invalid_route", "route fields must be non-empty strings"
         )
-    return route
+    agent = route.get("agent", "opencode")
+    identifier(agent, "route.agent")
+    return {"model": route["model"], "reasoning": route["reasoning"], "agent": agent}
 
 
 def _routes(value: object) -> dict:
@@ -174,14 +175,6 @@ def _routes(value: object) -> dict:
             "invalid_routes", "routes must pin planner, reviewer, and worker"
         )
     return {role: _route(route) for role, route in routes.items()}
-
-
-def _harness(value: object) -> str:
-    if value not in SUPPORTED_HARNESSES:
-        raise CoordinatorError(
-            "invalid_harness", "harness must be one of: opencode"
-        )
-    return value  # type: ignore[return-value]
 
 
 def _policy(value: object) -> dict:
@@ -311,7 +304,6 @@ def activation_payload(payload: object) -> dict:
             "template",
             "profile",
             "routes",
-            "harness",
             "permissions",
             "policy",
             "repositories",
@@ -326,8 +318,7 @@ def activation_payload(payload: object) -> dict:
         raise CoordinatorError("invalid_title", "title must be a non-empty string")
     _template(data.get("template"))
     _profile(data.get("profile"))
-    _routes(data.get("routes"))
-    _harness(data.get("harness"))
+    data["routes"] = _routes(data.get("routes"))
     permissions = data.get("permissions")
     permission_scope(permissions)
     repositories = data.get("repositories")

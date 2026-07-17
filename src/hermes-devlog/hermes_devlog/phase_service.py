@@ -32,7 +32,8 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
         "work_item_id",
         "worker_role",
         "model",
-        "variant",
+        "reasoning",
+        "agent",
         "session_id",
         "process_id",
         "command",
@@ -54,7 +55,8 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
         "work_item_id",
         "worker_role",
         "model",
-        "variant",
+        "reasoning",
+        "agent",
         "session_id",
         "process_id",
         "command",
@@ -108,7 +110,6 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
     phases = [
         "issue",
         "plan",
-        "plan_review",
         "implement",
         "implementation_review",
         "remediation",
@@ -150,14 +151,15 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
         matching_run = matching_runs[0] if matching_runs else None
         config = _store(goal_id).read_config()
         pinned = config["routes"][data["worker_role"]]
-        if data["model"] != pinned["model"] or data["variant"] != pinned["variant"]:
+        if any(
+            data[field] != pinned[field] for field in ("model", "reasoning", "agent")
+        ):
             raise CoordinatorError(
                 "route_mismatch", "phase run does not use the pinned model route"
             )
         allowed_targets = {
             "issue": {"issue", "plan"},
-            "plan": {"plan", "plan_review"},
-            "plan_review": {"plan_review", "implement"},
+            "plan": {"plan", "implement"},
             "implement": {"implement", "implementation_review", "remediation"},
             "implementation_review": {
                 "implementation_review",
@@ -173,7 +175,7 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
             raise CoordinatorError(
                 "invalid_transition", f"cannot move from {current} to {target}"
             )
-        if target in {"plan_review", "implementation_review"}:
+        if target == "implementation_review":
             if data["worker_role"] != "reviewer":
                 raise CoordinatorError(
                     "invalid_phase_run",

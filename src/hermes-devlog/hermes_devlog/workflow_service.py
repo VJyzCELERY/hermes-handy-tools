@@ -340,7 +340,6 @@ def complete(goal_id: str, revision: int) -> dict:
             )
         required_phases = {
             "plan",
-            "plan_review",
             "implement",
             "implementation_review",
             "pr_delivery",

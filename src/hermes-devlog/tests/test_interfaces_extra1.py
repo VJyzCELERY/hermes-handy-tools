@@ -46,11 +46,10 @@ def activation(goal_id="demo", *, merge=False):
         },
         "profile": {"name": "fallback", "match": "fallback", "sources": []},
         "routes": {
-            "planner": {"model": "model", "variant": "high"},
-            "reviewer": {"model": "model", "variant": "high"},
-            "worker": {"model": "model", "variant": "high"},
+            "planner": {"model": "model", "reasoning": "high", "agent": "opencode"},
+            "reviewer": {"model": "model", "reasoning": "high", "agent": "opencode"},
+            "worker": {"model": "model", "reasoning": "high", "agent": "opencode"},
         },
-        "harness": "opencode",
         "permissions": {"implement": True, "merge": merge},
         "policy": {"merge": merge},
         "repositories": ["org/demo"],
@@ -69,7 +68,7 @@ def running_phase(goal_id="demo", revision=1):
             "work_item_id": goal_id,
             "worker_role": "planner",
             "model": "model",
-            "variant": "high",
+            "reasoning": "high", "agent": "opencode",
             "session_id": "s",
             "process_id": "p",
             "command": "plan",
@@ -250,7 +249,7 @@ def test_service_rejects_invalid_graphs_and_records_workflow(tmp_path, monkeypat
         "work_item_id": "demo",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -262,7 +261,7 @@ def test_service_rejects_invalid_graphs_and_records_workflow(tmp_path, monkeypat
     phase("demo", phase_data, 3)
     phase_data.update(
         {
-            "phase": "plan_review",
+            "phase": "implement",
             "attempt": 2,
             "worker_role": "reviewer",
             "session_id": "plan-review-session",

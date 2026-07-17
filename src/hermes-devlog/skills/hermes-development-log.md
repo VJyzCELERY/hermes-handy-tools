@@ -23,13 +23,13 @@ tmux, a subprocess, or a notification sender.
 
 Activate a goal with its immutable released template and commit, command
 manifest hash, local snapshot, selected profile, matching mode, governing
-sources, routes per worker role (`planner`/`reviewer`/`worker`), harness,
-and permissions. The normal semantic baseline is
-`issue → plan → plan review → implement → implementation review/remediation → PR delivery → final verification → merge-ready`.
+sources and permissions. Each route pins model, reasoning, and agent; agent
+defaults to `opencode`. The normal semantic baseline is
+`issue → plan → implement → implementation review/remediation → PR delivery → final verification → merge-ready`.
 Record one owned phase run at a time with attempt, session, process identity,
 worktree, command reference, expected and observed evidence, lifecycle status,
-question status, and checkpoint. A run's model and variant must match its
-role's route; only `opencode` is a supported harness.
+question status, and checkpoint. A run's model, reasoning level, and agent
+must match its role's route.
 
 Goals may contain other goals recursively. Dependencies are separate directed
 edges: they block readiness but do not imply ownership. Child policy inherits

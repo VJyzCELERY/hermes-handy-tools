@@ -47,11 +47,10 @@ def activation(goal_id="demo", *, merge=False):
         },
         "profile": {"name": "fallback", "match": "fallback", "sources": []},
         "routes": {
-            "planner": {"model": "model", "variant": "high"},
-            "reviewer": {"model": "model", "variant": "high"},
-            "worker": {"model": "model", "variant": "high"},
+            "planner": {"model": "model", "reasoning": "high", "agent": "opencode"},
+            "reviewer": {"model": "model", "reasoning": "high", "agent": "opencode"},
+            "worker": {"model": "model", "reasoning": "high", "agent": "opencode"},
         },
-        "harness": "opencode",
         "permissions": {"implement": True, "merge": merge},
         "policy": {"merge": merge},
         "repositories": ["org/demo"],
@@ -70,7 +69,7 @@ def running_phase(goal_id="demo", revision=1):
             "work_item_id": goal_id,
             "worker_role": "planner",
             "model": "model",
-            "variant": "high",
+            "reasoning": "high", "agent": "opencode",
             "session_id": "s",
             "process_id": "p",
             "command": "plan",
@@ -99,7 +98,7 @@ def test_cli_and_custom_tool_have_equivalent_activation(tmp_path, monkeypatch, c
 @pytest.mark.parametrize(
     "worker_role,session_id", [("planner", "s"), ("reviewer", "s")]
 )
-def test_plan_review_requires_isolated_reviewer(
+def test_implement_requires_isolated_reviewer(
     tmp_path, monkeypatch, worker_role, session_id
 ):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -111,7 +110,7 @@ def test_plan_review_requires_isolated_reviewer(
         "work_item_id": "demo",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -135,7 +134,7 @@ def test_plan_review_requires_isolated_reviewer(
             2,
         )
 
-    assert error.value.code == "invalid_phase_run"
+    assert error.value.code == "invalid_transition"
 
 
 def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
@@ -148,7 +147,7 @@ def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
         "work_item_id": "demo",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -160,7 +159,7 @@ def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
     phase("demo", phase_data, 1)
     phase_data.update(
         {
-            "phase": "plan_review",
+            "phase": "implement",
             "attempt": 2,
             "worker_role": "reviewer",
             "session_id": "plan-review-session",
@@ -427,7 +426,7 @@ def test_sensitive_question_can_be_resolved_then_resumed(tmp_path, monkeypatch):
         "work_item_id": "demo",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -496,7 +495,7 @@ def test_non_utf8_state_and_config_return_invalid_state(tmp_path, monkeypatch):
                 "work_item_id": "other",
                 "worker_role": "planner",
                 "model": "model",
-                "variant": "high",
+                "reasoning": "high", "agent": "opencode",
                 "session_id": "s",
                 "process_id": "p",
                 "command": "plan",

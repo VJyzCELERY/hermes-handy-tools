@@ -11,6 +11,9 @@ dev = ["pytest>=7", "pytest-cov>=4", "radon>=6", "ruff>=0.6"]
 [project.scripts]
 hermes-devlog = "hermes_devlog.cli:main"
 
+[project.entry-points."hermes_agent.plugins"]
+hermes-devlog = "hermes_devlog.plugin"
+
 [tool.pytest.ini_options]
 addopts = "--strict-markers"
 testpaths = ["tests"]

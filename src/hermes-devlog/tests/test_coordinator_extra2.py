@@ -50,11 +50,10 @@ def payload():
         "template": template(),
         "profile": {"name": "native", "match": "native", "sources": []},
         "routes": {
-            "planner": {"model": "model", "variant": "high"},
-            "reviewer": {"model": "model", "variant": "high"},
-            "worker": {"model": "model", "variant": "high"},
+            "planner": {"model": "model", "reasoning": "high", "agent": "opencode"},
+            "reviewer": {"model": "model", "reasoning": "high", "agent": "opencode"},
+            "worker": {"model": "model", "reasoning": "high", "agent": "opencode"},
         },
-        "harness": "opencode",
         "permissions": {"implement": True, "merge": False},
         "repositories": ["org/demo"],
         "source_bindings": {"issue": "#1", "spec": "#4"},
@@ -72,7 +71,7 @@ def running_phase(goal_id, revision=1):
             "work_item_id": goal_id,
             "worker_role": "planner",
             "model": "model",
-            "variant": "high",
+            "reasoning": "high", "agent": "opencode",
             "session_id": "s",
             "process_id": "p",
             "command": "plan",
@@ -96,7 +95,7 @@ def test_phase_run_question_escalation_updates_active_session(tmp_path, monkeypa
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "s1",
         "process_id": "p1",
         "command": "plan",
@@ -127,7 +126,7 @@ def test_completed_phase_cannot_leave_question_unresolved(tmp_path, monkeypatch)
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "s1",
         "process_id": "p1",
         "command": "plan",
@@ -154,7 +153,7 @@ def test_question_requires_running_session(tmp_path, monkeypatch, session_id):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "running",
         "process_id": "p",
         "command": "plan",
@@ -354,7 +353,7 @@ def test_required_workflow_phases_are_enforced(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -364,42 +363,33 @@ def test_required_workflow_phases_are_enforced(tmp_path, monkeypatch):
         "next_action": "plan-review",
     }
     phase("demo-goal", phase_data, 1)
-    with pytest.raises(CoordinatorError) as error:
-        phase("demo-goal", {**phase_data, "phase": "implement", "attempt": 2}, 2)
-    assert error.value.code == "invalid_transition"
-    for revision, phase_name in enumerate(
-        ("plan_review", "implement", "implementation_review"), start=2
-    ):
-        phase_data = {
-            **phase_data,
-            "phase": phase_name,
-            "attempt": revision,
-            **(
-                {
-                    "worker_role": "reviewer",
-                    "session_id": (
-                        "plan-review-session"
-                        if phase_name == "plan_review"
-                        else "review-session"
-                    ),
-                    "process_id": (
-                        "plan-review-process"
-                        if phase_name == "plan_review"
-                        else "review-process"
-                    ),
-                }
-                if phase_name in {"plan_review", "implementation_review"}
-                else {}
-            ),
+    phase_data.update(
+        {
+            "phase": "implement",
+            "attempt": 2,
+            "worker_role": "worker",
+            "session_id": "implementation-session",
+            "process_id": "implementation-process",
         }
-        phase("demo-goal", phase_data, revision)
-    review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 5)
-    phase_data = {**phase_data, "phase": "pr_delivery", "attempt": 5}
+    )
+    phase("demo-goal", phase_data, 2)
+    phase_data.update(
+        {
+            "phase": "implementation_review",
+            "attempt": 3,
+            "worker_role": "reviewer",
+            "session_id": "review-session",
+            "process_id": "review-process",
+        }
+    )
+    phase("demo-goal", phase_data, 3)
+    review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 4)
+    phase_data = {**phase_data, "phase": "pr_delivery", "attempt": 4}
+    phase("demo-goal", phase_data, 5)
+    phase_data = {**phase_data, "phase": "final_verification", "attempt": 5}
     phase("demo-goal", phase_data, 6)
-    phase_data = {**phase_data, "phase": "final_verification", "attempt": 6}
-    phase("demo-goal", phase_data, 7)
-    gate("demo-goal", "final_verification", True, 8)
-    assert complete("demo-goal", 9)["state"]["completion"]["terminal"] is True
+    gate("demo-goal", "final_verification", True, 7)
+    assert complete("demo-goal", 8)["state"]["completion"]["terminal"] is True
 
 
 def test_phase_requires_pinned_route(tmp_path, monkeypatch):
@@ -412,7 +402,7 @@ def test_phase_requires_pinned_route(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "other-model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -443,7 +433,7 @@ def test_completed_phase_releases_capacity(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -595,7 +585,7 @@ def test_cli_dispatches_remaining_operations(tmp_path, monkeypatch, capsys):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",

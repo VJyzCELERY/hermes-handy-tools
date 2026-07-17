@@ -47,11 +47,10 @@ def activation(goal_id="demo", *, merge=False):
         },
         "profile": {"name": "fallback", "match": "fallback", "sources": []},
         "routes": {
-            "planner": {"model": "model", "variant": "high"},
-            "reviewer": {"model": "model", "variant": "high"},
-            "worker": {"model": "model", "variant": "high"},
+            "planner": {"model": "model", "reasoning": "high", "agent": "opencode"},
+            "reviewer": {"model": "model", "reasoning": "high", "agent": "opencode"},
+            "worker": {"model": "model", "reasoning": "high", "agent": "opencode"},
         },
-        "harness": "opencode",
         "permissions": {"implement": True, "merge": merge},
         "policy": {"merge": merge},
         "repositories": ["org/demo"],
@@ -70,7 +69,7 @@ def running_phase(goal_id="demo", revision=1):
             "work_item_id": goal_id,
             "worker_role": "planner",
             "model": "model",
-            "variant": "high",
+            "reasoning": "high", "agent": "opencode",
             "session_id": "s",
             "process_id": "p",
             "command": "plan",
@@ -152,18 +151,20 @@ def test_activity_records_are_timestamped_attributed_and_verified(
         ("profile", {"name": "x", "match": "wrong", "sources": []}, "invalid_profile"),
         (
             "routes",
-            {"planner": {"model": "", "variant": "high"}},
+            {"planner": {"model": "", "reasoning": "high", "agent": "opencode"}},
             "invalid_routes",
         ),
         (
             "routes",
             {
-                "planner": {"model": "model", "variant": "high"},
-                "reviewer": {"model": "model", "variant": "high"},
+                "planner": {"model": "model", "reasoning": "high", "agent": "opencode"},
+                "reviewer": {
+                    "model": "model", "reasoning": "high", "agent": "opencode"
+                },
             },
             "invalid_routes",
         ),
-        ("harness", "claude-code", "invalid_harness"),
+        ("harness", "claude-code", "unknown_field"),
         ("permissions", {"implement": "yes"}, "invalid_permissions"),
         ("policy", {"capacity": 0}, "invalid_policy"),
     ],

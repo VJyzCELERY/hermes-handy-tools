@@ -94,11 +94,10 @@ def payload():
         "template": template(),
         "profile": {"name": "native", "match": "native", "sources": []},
         "routes": {
-            "planner": {"model": "model", "variant": "high"},
-            "reviewer": {"model": "model", "variant": "high"},
-            "worker": {"model": "model", "variant": "high"},
+            "planner": {"model": "model", "reasoning": "high", "agent": "opencode"},
+            "reviewer": {"model": "model", "reasoning": "high", "agent": "opencode"},
+            "worker": {"model": "model", "reasoning": "high", "agent": "opencode"},
         },
-        "harness": "opencode",
         "permissions": {"implement": True, "merge": False},
         "repositories": ["org/demo"],
         "source_bindings": {"issue": "#1", "spec": "#4"},
@@ -116,7 +115,7 @@ def running_phase(goal_id, revision=1):
             "work_item_id": goal_id,
             "worker_role": "planner",
             "model": "model",
-            "variant": "high",
+            "reasoning": "high", "agent": "opencode",
             "session_id": "s",
             "process_id": "p",
             "command": "plan",
@@ -199,7 +198,7 @@ def test_implementation_review_rejects_builder_session(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "worker",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "shared",
         "process_id": "p",
         "command": "run",
@@ -213,7 +212,7 @@ def test_implementation_review_rejects_builder_session(tmp_path, monkeypatch):
         "demo-goal",
         {
             **run,
-            "phase": "plan_review",
+            "phase": "implement",
             "attempt": 2,
             "worker_role": "reviewer",
             "session_id": "plan-review-session",
@@ -281,7 +280,7 @@ def test_implementation_requires_permission(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -291,22 +290,10 @@ def test_implementation_requires_permission(tmp_path, monkeypatch):
         "next_action": "implement",
     }
     phase("demo-goal", phase_data, 1)
-    phase(
-        "demo-goal",
-        {
-            **phase_data,
-            "phase": "plan_review",
-            "attempt": 2,
-            "worker_role": "reviewer",
-            "session_id": "plan-review-session",
-            "process_id": "plan-review-process",
-        },
-        2,
-    )
     before = StateStore.from_goal("demo-goal").read()
 
     with pytest.raises(CoordinatorError) as error:
-        phase("demo-goal", {**phase_data, "phase": "implement", "attempt": 3}, 3)
+        phase("demo-goal", {**phase_data, "phase": "implement", "attempt": 2}, 2)
 
     assert error.value.code == "implementation_not_authorized"
     assert StateStore.from_goal("demo-goal").read() == before
@@ -327,35 +314,23 @@ def test_child_implementation_permission_narrows(tmp_path, monkeypatch):
         "work_item_id": "child",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "child-session",
         "process_id": "child-process",
         "command": "plan",
         "worktree": "/worktree",
         "expected_evidence": "plan",
         "observed_evidence": "plan",
-        "next_action": "plan_review",
+        "next_action": "implement",
     }
     phase("demo-goal", phase_data, 2)
-    phase(
-        "demo-goal",
-        {
-            **phase_data,
-            "phase": "plan_review",
-            "attempt": 2,
-            "worker_role": "reviewer",
-            "session_id": "plan-review-session",
-            "process_id": "plan-review-process",
-        },
-        3,
-    )
     before = StateStore.from_goal("demo-goal").read()
 
     with pytest.raises(CoordinatorError) as error:
         phase(
             "demo-goal",
-            {**phase_data, "phase": "implement", "attempt": 3},
-            4,
+            {**phase_data, "phase": "implement", "attempt": 2},
+            3,
         )
 
     assert error.value.code == "implementation_not_authorized"
@@ -383,7 +358,7 @@ def test_sensitive_question_cannot_resume_without_resolution(tmp_path, monkeypat
                 "work_item_id": "demo-goal",
                 "worker_role": "planner",
                 "model": "model",
-                "variant": "high",
+                "reasoning": "high", "agent": "opencode",
                 "session_id": "s",
                 "process_id": "p",
                 "command": "plan",
@@ -412,7 +387,7 @@ def test_independent_child_phase_lifecycles(tmp_path, monkeypatch):
         "work_item_id": "child-a",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "a-session",
         "process_id": "a-process",
         "command": "plan",
@@ -458,7 +433,7 @@ def test_phase_identity_cannot_cross_work_items(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "shared",
         "process_id": "p",
         "command": "plan",
@@ -516,7 +491,7 @@ def test_completion_requires_clean_review_children_and_dependencies(
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -528,7 +503,7 @@ def test_completion_requires_clean_review_children_and_dependencies(
     phase("demo-goal", phase_data, 3)
     phase_data.update(
         {
-            "phase": "plan_review",
+            "phase": "implement",
             "attempt": 2,
             "worker_role": "reviewer",
             "session_id": "plan-review-session",
@@ -601,7 +576,7 @@ def test_final_verification_can_enter_remediation(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "plan-session",
         "process_id": "plan-process",
         "command": "plan",
@@ -613,7 +588,7 @@ def test_final_verification_can_enter_remediation(tmp_path, monkeypatch):
     phase("demo-goal", phase_data, 1)
     phase_data.update(
         {
-            "phase": "plan_review",
+            "phase": "implement",
             "attempt": 2,
             "worker_role": "reviewer",
             "session_id": "plan-review-session",
@@ -680,7 +655,7 @@ def test_merge_permission_gate(tmp_path, monkeypatch):
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "model",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -692,7 +667,7 @@ def test_merge_permission_gate(tmp_path, monkeypatch):
     phase("demo-goal", phase_data, 1)
     phase_data.update(
         {
-            "phase": "plan_review",
+            "phase": "implement",
             "attempt": 2,
             "worker_role": "reviewer",
             "session_id": "plan-review-session",
@@ -819,9 +794,11 @@ def test_distinct_role_routes_are_pinned_and_mismatch_rejected(tmp_path, monkeyp
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     data = payload()
     data["routes"] = {
-        "planner": {"model": "gpt-5.6-terra", "variant": "high"},
-        "reviewer": {"model": "gpt-5.6-terra", "variant": "high"},
-        "worker": {"model": "gpt-5.6-luna", "variant": "high"},
+        "planner": {"model": "gpt-5.6-terra", "reasoning": "high", "agent": "opencode"},
+        "reviewer": {
+            "model": "gpt-5.6-terra", "reasoning": "high", "agent": "opencode"
+        },
+        "worker": {"model": "gpt-5.6-luna", "reasoning": "high", "agent": "opencode"},
     }
     activate(data)
     config = StateStore.from_goal("demo-goal").read_config()
@@ -835,7 +812,7 @@ def test_distinct_role_routes_are_pinned_and_mismatch_rejected(tmp_path, monkeyp
         "work_item_id": "demo-goal",
         "worker_role": "planner",
         "model": "gpt-5.6-terra",
-        "variant": "high",
+        "reasoning": "high", "agent": "opencode",
         "session_id": "s",
         "process_id": "p",
         "command": "plan",
@@ -856,23 +833,87 @@ def test_distinct_role_routes_are_pinned_and_mismatch_rejected(tmp_path, monkeyp
                 "attempt": 2,
                 "worker_role": "worker",
                 "model": "gpt-5.6-terra",
-                "variant": "high",
+                "reasoning": "high", "agent": "opencode",
             },
             2,
         )
     assert error.value.code == "route_mismatch"
 
 
-def test_activation_persists_harness_and_rejects_unsupported(tmp_path, monkeypatch):
+def test_routes_default_agents_allow_role_specific_agents_and_skip_implement(
+    tmp_path, monkeypatch
+):
+    """New goals pin agent routes and move directly from plan to implementation."""
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    activate(payload())
-    config = StateStore.from_goal("demo-goal").read_config()
-    assert config["harness"] == "opencode"
+    data = payload()
 
-    bad = copy.deepcopy(payload())
-    bad["goal_id"] = "other-goal"
-    bad["harness"] = "claude-code"
+    data["routes"] = {
+        "planner": {"model": "gpt-5.6-terra", "reasoning": "high"},
+        "reviewer": {
+            "model": "gpt-5.6-terra",
+            "reasoning": "high",
+            "agent": "codex",
+        },
+        "worker": {
+            "model": "gpt-5.6-luna",
+            "reasoning": "high",
+            "agent": "claude-code",
+        },
+    }
+    activate(data)
+    config = StateStore.from_goal("demo-goal").read_config()
+    assert config["routes"]["planner"]["agent"] == "opencode"
+    assert config["routes"]["reviewer"]["agent"] == "codex"
+    assert config["routes"]["worker"]["agent"] == "claude-code"
+
+    plan_run = {
+        "phase": "plan",
+        "owner": "planner",
+        "attempt": 1,
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "gpt-5.6-terra",
+        "reasoning": "high",
+        "agent": "opencode",
+        "session_id": "plan-session",
+        "process_id": "plan-process",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "implement",
+    }
+    phase("demo-goal", plan_run, 1)
+
     with pytest.raises(CoordinatorError) as error:
-        activate(bad)
-    assert error.value.code == "invalid_harness"
-    assert not (tmp_path / "dev-log" / "other-goal").exists()
+        phase(
+            "demo-goal",
+            {
+                **plan_run,
+                "phase": "implement",
+                "attempt": 2,
+                "worker_role": "worker",
+                "model": "gpt-5.6-luna",
+                "agent": "opencode",
+            },
+            2,
+        )
+    assert error.value.code == "route_mismatch"
+
+    state = phase(
+        "demo-goal",
+        {
+            **plan_run,
+            "phase": "implement",
+            "attempt": 2,
+            "worker_role": "worker",
+            "model": "gpt-5.6-luna",
+            "agent": "claude-code",
+            "session_id": "implementation-session",
+            "process_id": "implementation-process",
+            "command": "implement",
+            "next_action": "implementation_review",
+        },
+        2,
+    )
+    assert state["state"]["phase"] == "implement"

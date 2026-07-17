@@ -17,11 +17,18 @@ def test_activation_persists_pinned_state(tmp_path, monkeypatch, capsys):
         },
         "profile": {"name": "native", "match": "native", "sources": ["AGENTS.md"]},
         "routes": {
-            "planner": {"model": "openai/gpt-5.6-luna", "variant": "high"},
-            "reviewer": {"model": "openai/gpt-5.6-terra", "variant": "high"},
-            "worker": {"model": "openai/gpt-5.6-luna", "variant": "high"},
+            "planner": {
+                "model": "openai/gpt-5.6-luna", "reasoning": "high", "agent": "opencode"
+            },
+            "reviewer": {
+                "model": "openai/gpt-5.6-terra",
+                "reasoning": "high",
+                "agent": "opencode",
+            },
+            "worker": {
+                "model": "openai/gpt-5.6-luna", "reasoning": "high", "agent": "opencode"
+            },
         },
-        "harness": "opencode",
         "permissions": {"claim": True, "implement": True, "merge": False},
         "repositories": ["org/demo"],
         "source_bindings": {"issue": "#1", "spec": "#4"},

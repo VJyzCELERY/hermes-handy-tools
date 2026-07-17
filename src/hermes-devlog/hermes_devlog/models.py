@@ -9,7 +9,6 @@ class Phase(StrEnum):
 
     ISSUE = "issue"
     PLAN = "plan"
-    PLAN_REVIEW = "plan_review"
     IMPLEMENT = "implement"
     IMPLEMENTATION_REVIEW = "implementation_review"
     REMEDIATION = "remediation"

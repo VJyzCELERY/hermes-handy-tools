@@ -50,7 +50,6 @@ def activate(payload: Mapping) -> dict:
         "template": deepcopy(data["template"]),
         "profile": deepcopy(data["profile"]),
         "routes": deepcopy(data["routes"]),
-        "harness": data["harness"],
         "permissions": deepcopy(data["permissions"]),
         "repositories": deepcopy(data["repositories"]),
         "source_bindings": deepcopy(data["source_bindings"]),
