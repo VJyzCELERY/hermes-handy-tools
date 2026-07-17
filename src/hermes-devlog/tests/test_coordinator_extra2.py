@@ -224,6 +224,37 @@ def test_scheduler_requires_expected_revision(
     assert store.activity_path.read_text() == activity_before
 
 
+def test_state_store_rejects_secret_next_action(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    store = StateStore.from_goal("demo-goal")
+    before = store.read()
+    activity_before = store.activity_path.read_text()
+
+    with pytest.raises(CoordinatorError) as error:
+        store.set_next_action("ghp_" + "a" * 36, expected_revision=1)
+
+    assert error.value.code == "secret_value"
+    assert store.read() == before
+    assert store.activity_path.read_text() == activity_before
+
+
+def test_root_blocker_dependency_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    add_goal("demo-goal", {"id": "child", "title": "Child"}, 1)
+    store = StateStore.from_goal("demo-goal")
+    before = store.read()
+    activity_before = store.activity_path.read_text()
+
+    with pytest.raises(CoordinatorError) as error:
+        add_dependency("demo-goal", "demo-goal", "child", 2)
+
+    assert error.value.code == "invalid_dependency"
+    assert store.read() == before
+    assert store.activity_path.read_text() == activity_before
+
+
 
 
 def test_required_workflow_phases_are_enforced(tmp_path, monkeypatch):
@@ -455,8 +486,8 @@ def test_cli_dispatches_remaining_operations(tmp_path, monkeypatch, capsys):
                 json.dumps(
                     {
                         "goal_id": "demo-goal",
-                        "blocker": "demo-goal",
-                        "blocked": "child",
+                        "blocker": "child",
+                        "blocked": "demo-goal",
                         "expected_revision": 2,
                     }
                 ),

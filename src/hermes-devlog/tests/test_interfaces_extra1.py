@@ -235,9 +235,9 @@ def test_service_rejects_invalid_graphs_and_records_workflow(tmp_path, monkeypat
     add_goal("demo", {"id": "child", "title": "Child"}, 1)
     with pytest.raises(CoordinatorError):
         add_goal("demo", {"id": "child", "title": "Child"}, 2)
-    add_dependency("demo", "demo", "child", 2)
+    add_dependency("demo", "child", "demo", 2)
     with pytest.raises(CoordinatorError):
-        add_dependency("demo", "demo", "child", 3)
+        add_dependency("demo", "child", "demo", 3)
     phase_data = {
         "phase": "plan",
         "owner": "planner",

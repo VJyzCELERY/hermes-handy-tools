@@ -7,6 +7,7 @@ from .validation import (
     PHASE_RUN_STATUSES,
     PHASES,
     POLICY_FIELDS,
+    PROFILE_MATCH_RANK,
     QUESTION_RECORD_STATUSES,
     QUESTION_STATUSES,
     SENSITIVE_QUESTION_CLASSES,
@@ -46,6 +47,16 @@ def _validate_goal_graph(graph: object, parent_policy: dict) -> dict:
         if parent_id is not None:
             parent = nodes[parent_id]
             _validate_policy_narrowing(node["policy"], parent["policy"])
+            if (
+                PROFILE_MATCH_RANK[node["profile"]["match"]]
+                < PROFILE_MATCH_RANK[parent["profile"]["match"]]
+                or not set(node["profile"]["sources"]).issubset(
+                    parent["profile"]["sources"]
+                )
+            ):
+                raise CoordinatorError(
+                    "invalid_state", "child profile broadens parent profile"
+                )
             parent_permissions = parent["permissions"]
             if set(node["permissions"]) != set(parent_permissions) or any(
                 value and not parent_permissions[key]
@@ -148,6 +159,16 @@ def _policy(value: object) -> dict:
     data = strict_mapping(value, POLICY_FIELDS, "policy")
     if set(data) != POLICY_FIELDS:
         raise CoordinatorError("invalid_state", "goal policy is incomplete")
+    if (
+        not isinstance(data["capacity"], int)
+        or isinstance(data["capacity"], bool)
+        or data["capacity"] < 1
+    ):
+        raise CoordinatorError("invalid_state", "goal policy capacity is invalid")
+    if any(
+        not isinstance(data[field], bool) for field in POLICY_FIELDS - {"capacity"}
+    ):
+        raise CoordinatorError("invalid_state", "goal policy flags are invalid")
     return data
 
 

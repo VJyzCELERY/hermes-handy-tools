@@ -148,6 +148,7 @@ class StateStore:
                 )
             updated = change(json.loads(json.dumps(state)))
             updated["revision"] = expected + 1
+            reject_secrets(updated)
             validate_state(updated)
             state_bytes = self.state_path.read_bytes()
             activity_bytes = self.activity_path.read_bytes()

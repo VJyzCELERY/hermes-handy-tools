@@ -219,6 +219,10 @@ def add_dependency(goal_id: str, blocker: str, blocked: str, revision: int) -> d
         nodes = state["goal_graph"]["nodes"]
         if blocker not in nodes or blocked not in nodes:
             raise CoordinatorError("missing_goal", "dependency endpoint does not exist")
+        if nodes[blocker].get("parent_id") is None:
+            raise CoordinatorError(
+                "invalid_dependency", "the root goal cannot block dependencies"
+            )
         edge = {"blocker": blocker, "blocked": blocked}
         edges = state["goal_graph"]["dependencies"]
         if edge in edges:

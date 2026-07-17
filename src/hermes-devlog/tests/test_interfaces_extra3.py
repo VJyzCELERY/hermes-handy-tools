@@ -346,3 +346,40 @@ def test_persisted_child_policy_cannot_broaden_parent(
 
     with pytest.raises(CoordinatorError):
         status("demo")
+
+
+def test_persisted_policy_rejects_boolean_capacity(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    from hermes_devlog.store import StateStore
+
+    path = StateStore.from_goal("demo").state_path
+    state = json.loads(path.read_text())
+    state["goal_graph"]["nodes"]["demo"]["policy"]["capacity"] = True
+    path.write_text(json.dumps(state))
+
+    with pytest.raises(CoordinatorError) as error:
+        status("demo")
+
+    assert error.value.code == "invalid_state"
+
+
+def test_persisted_child_profile_cannot_broaden(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    add_goal("demo", {"id": "child", "title": "Child"}, 1)
+    from hermes_devlog.store import StateStore
+
+    path = StateStore.from_goal("demo").state_path
+    state = json.loads(path.read_text())
+    state["goal_graph"]["nodes"]["child"]["profile"] = {
+        "name": "native",
+        "match": "native",
+        "sources": ["unapproved.md"],
+    }
+    path.write_text(json.dumps(state))
+
+    with pytest.raises(CoordinatorError) as error:
+        status("demo")
+
+    assert error.value.code == "invalid_state"

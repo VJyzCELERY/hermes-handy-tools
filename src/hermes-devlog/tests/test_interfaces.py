@@ -240,13 +240,13 @@ def test_persisted_dependency_cycle_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(activation())
     add_goal("demo", {"id": "child", "title": "Child"}, 1)
-    add_dependency("demo", "demo", "child", 2)
+    add_dependency("demo", "child", "demo", 2)
 
     from hermes_devlog.store import StateStore
 
     path = StateStore.from_goal("demo").state_path
     state = json.loads(path.read_text())
-    state["goal_graph"]["dependencies"].append({"blocker": "child", "blocked": "demo"})
+    state["goal_graph"]["dependencies"].append({"blocker": "demo", "blocked": "child"})
     path.write_text(json.dumps(state))
 
     result = hermes_devlog("status", {"goal_id": "demo"})
