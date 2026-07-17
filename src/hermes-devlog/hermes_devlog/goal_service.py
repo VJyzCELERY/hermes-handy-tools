@@ -113,6 +113,13 @@ def _apply_goal(state: dict, goal_id: str, data: dict, child_id: str) -> dict:
     parent_policy.update(parent.get("policy", {}))
     parent_profile = parent["profile"]
     parent_permissions = parent["permissions"]
+    if "repositories" in data and (
+        "repositories" not in parent
+        or not set(data["repositories"]).issubset(parent["repositories"])
+    ):
+        raise CoordinatorError(
+            "scope_broadening", "child repositories must stay within parent scope"
+        )
     child_profile = profile_payload(data.get("profile", parent_profile))
     if (
         PROFILE_MATCH_RANK[child_profile["match"]]

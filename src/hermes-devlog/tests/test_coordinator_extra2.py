@@ -21,6 +21,7 @@ from hermes_devlog.service import (
     set_goal_disposition,
 )
 from hermes_devlog.store import StateStore
+from hermes_devlog.validation import validate_state
 
 
 def _race_mutation(home, results):
@@ -222,6 +223,45 @@ def test_child_goal_inherits_scope_bindings(tmp_path, monkeypatch):
     assert child["repositories"] == payload()["repositories"]
     assert child["source_bindings"] == payload()["source_bindings"]
     assert child["completion_contract"] == payload()["completion_contract"]
+
+
+def test_child_goal_cannot_broaden_repository_scope(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    store = StateStore.from_goal("demo-goal")
+    before = store.read()
+
+    with pytest.raises(CoordinatorError) as error:
+        add_goal(
+            "demo-goal",
+            {
+                "id": "child",
+                "title": "Child",
+                "repositories": ["untrusted/repo"],
+            },
+            1,
+        )
+
+    assert error.value.code == "scope_broadening"
+    assert store.read() == before
+
+
+def test_persisted_child_repository_scope_must_be_bounded(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    state = activate(payload())["state"]
+    child = copy.deepcopy(state["goal_graph"]["nodes"]["demo-goal"])
+    child.update(
+        id="child",
+        parent_id="demo-goal",
+        repositories=["untrusted/repo"],
+    )
+    state["goal_graph"]["nodes"]["child"] = child
+    state["work_items"]["child"] = {"phase": "issue", "next_action": "begin_child"}
+
+    with pytest.raises(CoordinatorError) as error:
+        validate_state(state)
+
+    assert error.value.code == "invalid_state"
 
 
 def test_goal_and_dependency_errors_are_structured(tmp_path, monkeypatch):

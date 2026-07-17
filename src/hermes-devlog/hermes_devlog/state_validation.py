@@ -57,6 +57,13 @@ def _validate_goal_graph(graph: object, parent_policy: dict) -> dict:
                 raise CoordinatorError(
                     "invalid_state", "child profile broadens parent profile"
                 )
+            if "repositories" in node and (
+                "repositories" not in parent
+                or not set(node["repositories"]).issubset(parent["repositories"])
+            ):
+                raise CoordinatorError(
+                    "invalid_state", "child repositories broaden parent scope"
+                )
             parent_permissions = parent["permissions"]
             if set(node["permissions"]) != set(parent_permissions) or any(
                 value and not parent_permissions[key]
@@ -132,9 +139,10 @@ def _validate_goal_node(node_id: object, value: object) -> None:
     profile_payload(node["profile"])
     if "repositories" in node and (
         not isinstance(node["repositories"], list)
-        or not all(isinstance(item, str) for item in node["repositories"])
+        or not node["repositories"]
+        or not all(isinstance(item, str) and item for item in node["repositories"])
     ):
-        raise CoordinatorError("invalid_state", "goal repositories must be strings")
+        raise CoordinatorError("invalid_state", "goal repositories are invalid")
     if "source_bindings" in node:
         if (
             not isinstance(node["source_bindings"], (Mapping, list))

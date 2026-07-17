@@ -202,19 +202,19 @@ def resolve_question(goal_id: str, data: Mapping, revision: int) -> dict:
                 "question_unresolved", "question session has no pending question"
             )
         verified = _authority_is_verified(data["authority_reference"], state, config)
-        state["questions"].append(
+        pending.update(
             {
-                "session_id": data["session_id"],
-                "question": pending["question"],
                 "answer": data["answer"],
-                "question_class": pending["question_class"],
                 "authority_reference": data["authority_reference"],
                 "status": "answered" if verified else "needs_user",
             }
         )
+        if verified:
+            pending.pop("escalate", None)
+        else:
+            pending["escalate"] = True
         has_pending = any(
-            item is not pending
-            and item["session_id"] == data["session_id"]
+            item["session_id"] == data["session_id"]
             and item["status"] == "needs_user"
             for item in state["questions"]
         )

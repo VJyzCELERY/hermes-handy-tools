@@ -405,7 +405,16 @@ def test_sensitive_question_can_be_resolved_then_resumed(tmp_path, monkeypatch):
     )
 
     assert result["state"]["phase_runs"][0]["question_status"] == "answered"
-    assert result["state"]["questions"][0]["status"] == "needs_user"
+    assert result["state"]["questions"] == [
+        {
+            "session_id": "s",
+            "question": "May I expand scope?",
+            "answer": "Approved for the requested scope.",
+            "question_class": "scope",
+            "authority_reference": "state:policy",
+            "status": "answered",
+        }
+    ]
     phase_data = {
         "phase": "plan",
         "owner": "planner",
