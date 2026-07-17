@@ -105,7 +105,11 @@ class StateStore:
             try:
                 self._atomic_json(
                     self.pending_path,
-                    self._activity_record("activate", 1),
+                    {
+                        "activity": self._activity_record("activate", 1),
+                        "config": config,
+                        "state": state,
+                    },
                 )
                 self._atomic_json(self.config_path, config)
                 self._atomic_json(self.state_path, state)
@@ -241,7 +245,10 @@ class StateStore:
             raise CoordinatorError(
                 "invalid_state", "pending activity record is invalid"
             )
-        self._validate_activity_record(pending, "pending activity record")
+        if set(pending) == {"activity", "config", "state"}:
+            pending = self._recover_activation(pending)
+        else:
+            self._validate_activity_record(pending, "pending activity record")
         try:
             state = json.loads(self.state_path.read_text())
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -267,6 +274,37 @@ class StateStore:
                 "invalid_state", "pending state commit is inconsistent"
             )
         self.pending_path.unlink()
+
+    def _recover_activation(self, pending: dict) -> dict:
+        """Complete an interrupted activation transaction."""
+        activity = pending["activity"]
+        config = pending["config"]
+        state = pending["state"]
+        try:
+            self._validate_activity_record(activity, "pending activation activity", 1)
+            if activity["operation"] != "activate":
+                raise CoordinatorError("invalid_state", "pending activation is invalid")
+            if (
+                not isinstance(config, dict)
+                or config.get("schema_version") != 1
+                or not isinstance(state, dict)
+                or state.get("schema_version") != 1
+            ):
+                raise CoordinatorError("invalid_state", "pending activation is invalid")
+            reject_secrets(config)
+            reject_secrets(state)
+            activation_payload(
+                {key: value for key, value in config.items() if key != "schema_version"}
+            )
+            validate_state(state)
+        except CoordinatorError as exc:
+            raise CoordinatorError(
+                "invalid_state", "pending activation is invalid"
+            ) from exc
+
+        self._atomic_json(self.config_path, config)
+        self._atomic_json(self.state_path, state)
+        return activity
 
     def _validate_activity(self, state_revision: int) -> None:
         """Validate the append-only activity ledger against state revision."""

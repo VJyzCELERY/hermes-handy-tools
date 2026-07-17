@@ -393,3 +393,22 @@ def test_malformed_activity_record_is_rejected(tmp_path, monkeypatch):
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_state"
+
+
+def test_activation_recovers_if_state_replacement_is_interrupted(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    from hermes_devlog.store import StateStore
+
+    original = StateStore._atomic_json
+
+    def interrupt_state_write(self, path, value):
+        if path == self.state_path:
+            raise KeyboardInterrupt
+        original(self, path, value)
+
+    monkeypatch.setattr(StateStore, "_atomic_json", interrupt_state_write)
+    with pytest.raises(KeyboardInterrupt):
+        activate(activation())
+
+    monkeypatch.setattr(StateStore, "_atomic_json", original)
+    assert status("demo")["state"]["revision"] == 1
