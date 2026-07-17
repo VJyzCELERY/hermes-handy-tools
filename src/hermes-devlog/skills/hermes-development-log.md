@@ -23,11 +23,13 @@ tmux, a subprocess, or a notification sender.
 
 Activate a goal with its immutable released template and commit, command
 manifest hash, local snapshot, selected profile, matching mode, governing
-sources, model route, and allowed permissions. The normal semantic baseline is
+sources, routes per worker role (`planner`/`reviewer`/`worker`), harness,
+and permissions. The normal semantic baseline is
 `issue → plan → plan review → implement → implementation review/remediation → PR delivery → final verification → merge-ready`.
 Record one owned phase run at a time with attempt, session, process identity,
 worktree, command reference, expected and observed evidence, lifecycle status,
-question status, and checkpoint.
+question status, and checkpoint. A run's model and variant must match its
+role's route; only `opencode` is a supported harness.
 
 Goals may contain other goals recursively. Dependencies are separate directed
 edges: they block readiness but do not imply ownership. Child policy inherits
@@ -43,11 +45,9 @@ always a separately authorized external action.
 ## Bounded operation
 
 Use isolated `HERMES_HOME` when testing or developing a workflow.
-Activation creates the goal directory. Provide goal identity, title, released
-template binding, profile and matching mode,
-model route, permissions, and policy in one request. Treat the resulting
-`config.json` as immutable. Do not copy a repository template into the goal
-directory.
+Activation creates the goal directory; provide the activation fields in one
+request. Treat the resulting `config.json` as immutable. Do not copy a
+repository template into the goal directory.
 
 Every later mutation names the goal and supplies the revision it observed.
 Read `status` or `next` again after a revision conflict; never retry a stale
