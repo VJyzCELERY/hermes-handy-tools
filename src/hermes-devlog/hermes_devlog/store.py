@@ -48,6 +48,10 @@ class StateStore:
             state = json.loads(self.state_path.read_text())
         except FileNotFoundError as exc:
             raise CoordinatorError("not_found", "goal state does not exist") from exc
+        except (OSError, UnicodeDecodeError) as exc:
+            raise CoordinatorError(
+                "invalid_state", "goal state cannot be read"
+            ) from exc
         except json.JSONDecodeError as exc:
             raise CoordinatorError(
                 "invalid_state", "goal state is not valid JSON"
@@ -67,6 +71,10 @@ class StateStore:
             config = json.loads(self.config_path.read_text())
         except FileNotFoundError as exc:
             raise CoordinatorError("not_found", "goal config does not exist") from exc
+        except (OSError, UnicodeDecodeError) as exc:
+            raise CoordinatorError(
+                "invalid_state", "goal config cannot be read"
+            ) from exc
         except json.JSONDecodeError as exc:
             raise CoordinatorError(
                 "invalid_state", "goal config is not valid JSON"
@@ -149,6 +157,10 @@ class StateStore:
                     "expected revision does not match current state",
                     expected=expected,
                     actual=state["revision"],
+                )
+            if state["completion"].get("terminal"):
+                raise CoordinatorError(
+                    "terminal_state", "completed goal state cannot be mutated"
                 )
             updated = change(json.loads(json.dumps(state)))
             updated["revision"] = expected + 1

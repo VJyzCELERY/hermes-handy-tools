@@ -116,11 +116,23 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
             raise CoordinatorError("missing_work_item", "work item does not exist")
         current = work_item["phase"]
         target = data["phase"]
-        matching_runs = [
+        identity_runs = [
             run
             for run in state["phase_runs"]
             if run["session_id"] == data["session_id"]
             and run["attempt"] == data["attempt"]
+        ]
+        if any(
+            run["work_item_id"] != data["work_item_id"] for run in identity_runs
+        ):
+            raise CoordinatorError(
+                "invalid_phase_run",
+                "phase session and attempt belong to another work item",
+            )
+        matching_runs = [
+            run
+            for run in identity_runs
+            if run["work_item_id"] == data["work_item_id"]
         ]
         if len(matching_runs) > 1:
             raise CoordinatorError(

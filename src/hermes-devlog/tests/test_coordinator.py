@@ -442,6 +442,60 @@ def test_independent_child_phase_lifecycles(tmp_path, monkeypatch):
     assert error.value.code == "missing_work_item"
 
 
+def test_phase_identity_cannot_cross_work_items(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    add_goal("demo-goal", {"id": "child", "title": "Child"}, 1)
+    phase_data = {
+        "phase": "plan",
+        "owner": "planner",
+        "attempt": 1,
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "shared",
+        "process_id": "p",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "plan",
+        "status": "running",
+    }
+    phase("demo-goal", phase_data, 2)
+    before = StateStore.from_goal("demo-goal").read()
+
+    with pytest.raises(CoordinatorError) as error:
+        phase("demo-goal", {**phase_data, "work_item_id": "child"}, 3)
+
+    assert error.value.code == "invalid_phase_run"
+    assert StateStore.from_goal("demo-goal").read() == before
+
+
+def test_completed_goal_rejects_all_mutations(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    store = StateStore.from_goal("demo-goal")
+
+    def mark_terminal(state):
+        state["completion"]["ready"] = True
+        state["completion"]["terminal"] = True
+        state["phase"] = "merge_ready"
+        return state
+
+    store.mutate(1, "complete", mark_terminal)
+    before = store.read()
+    activity_before = store.activity_path.read_bytes()
+
+    with pytest.raises(CoordinatorError) as error:
+        add_goal("demo-goal", {"id": "child", "title": "Child"}, 2)
+
+    assert error.value.code == "terminal_state"
+    assert store.read() == before
+    assert store.activity_path.read_bytes() == activity_before
+
+
 def test_completion_requires_clean_review_children_and_dependencies(
     tmp_path, monkeypatch
 ):

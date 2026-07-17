@@ -242,6 +242,8 @@ def _validate_phase_runs(value: object, nodes: Mapping) -> None:
     }
     if not isinstance(value, list):
         raise CoordinatorError("invalid_state", "phase_runs must be a list")
+    identities = set()
+    session_attempts = {}
     for run in value:
         item = strict_mapping(run, fields, "phase_run")
         if set(item) != fields or item["phase"] not in PHASES:
@@ -261,6 +263,22 @@ def _validate_phase_runs(value: object, nodes: Mapping) -> None:
             if not isinstance(item[field], str) or not item[field]:
                 raise CoordinatorError("invalid_state", f"phase run {field} is invalid")
         identifier(item["work_item_id"], "phase_run.work_item_id")
+        identity = (
+            item["session_id"],
+            item["attempt"],
+            item["work_item_id"],
+        )
+        if identity in identities:
+            raise CoordinatorError("invalid_state", "phase run identity is duplicated")
+        identities.add(identity)
+        session_attempt = (item["session_id"], item["attempt"])
+        prior_work_item = session_attempts.setdefault(
+            session_attempt, item["work_item_id"]
+        )
+        if prior_work_item != item["work_item_id"]:
+            raise CoordinatorError(
+                "invalid_state", "phase session and attempt cross work items"
+            )
         identifier(item["worker_role"], "phase_run.worker_role")
         if item["work_item_id"] not in nodes:
             raise CoordinatorError("invalid_state", "phase run work item is missing")

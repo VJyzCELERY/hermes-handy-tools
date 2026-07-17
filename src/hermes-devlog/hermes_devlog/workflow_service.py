@@ -133,6 +133,67 @@ def question(goal_id: str, data: Mapping, revision: int) -> dict:
     return _mutate(goal_id, revision, "question", change)
 
 
+def resolve_question(goal_id: str, data: Mapping, revision: int) -> dict:
+    """Record Hermes authority resolving a question waiting for the user."""
+    if not isinstance(data, Mapping):
+        raise CoordinatorError(
+            "invalid_object", "question resolution must be an object"
+        )
+    reject_secrets(data)
+    if (
+        set(data) - {"session_id", "answer", "authority_reference"}
+        or not isinstance(data.get("session_id"), str)
+        or not data["session_id"]
+        or not isinstance(data.get("answer"), str)
+        or not data["answer"]
+        or "authority_reference" not in data
+    ):
+        raise CoordinatorError(
+            "invalid_question",
+            "question resolution requires session_id, answer, and authority_reference",
+        )
+    authority_reference(data["authority_reference"])
+
+    def change(state):
+        matching_runs = [
+            run
+            for run in state["phase_runs"]
+            if run["session_id"] == data["session_id"] and run["status"] == "running"
+        ]
+        if len(matching_runs) != 1:
+            raise CoordinatorError(
+                "invalid_session", "question session must have exactly one running run"
+            )
+        pending = next(
+            (
+                item
+                for item in reversed(state["questions"])
+                if item["session_id"] == data["session_id"]
+                and item["status"] == "needs_user"
+            ),
+            None,
+        )
+        if pending is None:
+            raise CoordinatorError(
+                "question_unresolved", "question session has no pending question"
+            )
+        state["questions"].append(
+            {
+                "session_id": data["session_id"],
+                "question": pending["question"],
+                "answer": data["answer"],
+                "question_class": pending["question_class"],
+                "authority_reference": data["authority_reference"],
+                "status": "answered",
+            }
+        )
+        matching_runs[0]["question_status"] = "answered"
+        state["next_action"] = "resume_session"
+        return state
+
+    return _mutate(goal_id, revision, "resolve_question", change)
+
+
 def status(goal_id: str) -> dict:
     """Return current state without mutation."""
     return {"state": _store(goal_id).read()}

@@ -17,6 +17,7 @@ OPERATIONS = {
     "phase",
     "review",
     "question",
+    "resolve_question",
     "complete",
     "gate",
     "discovered_work",
@@ -55,6 +56,7 @@ def _dispatch(operation: str, payload: dict) -> dict:
         "phase": {"goal_id", "data", "expected_revision"},
         "review": {"goal_id", "data", "expected_revision"},
         "question": {"goal_id", "data", "expected_revision"},
+        "resolve_question": {"goal_id", "data", "expected_revision"},
         "complete": {"goal_id", "expected_revision"},
         "gate": {"goal_id", "name", "value", "expected_revision"},
         "discovered_work": {"goal_id", "item", "expected_revision"},
@@ -78,7 +80,7 @@ def _dispatch(operation: str, payload: dict) -> dict:
         return service.add_dependency(
             goal_id, payload["blocker"], payload["blocked"], revision
         )
-    if operation in {"phase", "review", "question"}:
+    if operation in {"phase", "review", "question", "resolve_question"}:
         return getattr(service, operation)(goal_id, payload["data"], revision)
     if operation == "complete":
         return service.complete(goal_id, revision)

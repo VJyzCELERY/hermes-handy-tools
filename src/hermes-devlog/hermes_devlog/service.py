@@ -13,6 +13,7 @@ from .workflow_service import (
     gate,
     next_action,
     question,
+    resolve_question,
     review,
     status,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "next_action",
     "phase",
     "question",
+    "resolve_question",
     "review",
     "set_goal_disposition",
     "status",

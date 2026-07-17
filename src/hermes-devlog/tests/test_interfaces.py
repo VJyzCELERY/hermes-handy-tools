@@ -19,6 +19,7 @@ from hermes_devlog.service import (
     gate,
     phase,
     question,
+    resolve_question,
     review,
     status,
 )
@@ -381,6 +382,90 @@ def test_declared_scope_question_requires_user(tmp_path, monkeypatch):
     item = result["state"]["questions"][-1]
     assert item["question_class"] == "scope"
     assert item["status"] == "needs_user"
+
+
+def test_sensitive_question_can_be_resolved_then_resumed(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    running_phase()
+    question(
+        "demo",
+        {"session_id": "s", "question": "May I expand scope?", "answer": "yes"},
+        2,
+    )
+
+    result = resolve_question(
+        "demo",
+        {
+            "session_id": "s",
+            "answer": "Approved for the requested scope.",
+            "authority_reference": "state:policy",
+        },
+        3,
+    )
+
+    assert result["state"]["phase_runs"][0]["question_status"] == "answered"
+    assert result["state"]["questions"][0]["status"] == "needs_user"
+    phase_data = {
+        "phase": "plan",
+        "owner": "planner",
+        "attempt": 1,
+        "work_item_id": "demo",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "s",
+        "process_id": "p",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "plan",
+        "status": "completed",
+    }
+    resumed = phase("demo", phase_data, 4)
+    assert resumed["state"]["phase_runs"][0]["status"] == "completed"
+
+
+def test_non_utf8_state_and_config_return_invalid_state(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    from hermes_devlog.store import StateStore
+
+    store = StateStore.from_goal("demo")
+    store.state_path.write_bytes(b"\xff")
+    assert (
+        hermes_devlog("status", {"goal_id": "demo"})["error"]["code"]
+        == "invalid_state"
+    )
+
+    activate(activation("other"))
+    other = StateStore.from_goal("other")
+    other.config_path.write_bytes(b"\xff")
+    result = hermes_devlog(
+        "phase",
+        {
+            "goal_id": "other",
+            "expected_revision": 1,
+            "data": {
+                "phase": "plan",
+                "owner": "planner",
+                "attempt": 1,
+                "work_item_id": "other",
+                "worker_role": "planner",
+                "model": "model",
+                "variant": "high",
+                "session_id": "s",
+                "process_id": "p",
+                "command": "plan",
+                "worktree": "/worktree",
+                "expected_evidence": "plan",
+                "observed_evidence": "plan",
+                "next_action": "plan",
+            },
+        },
+    )
+    assert result["error"]["code"] == "invalid_state"
 
 def test_malformed_activity_record_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))

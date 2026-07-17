@@ -14,3 +14,7 @@ uv run hermes-devlog activate '{"goal_id":"demo","title":"Demo","template":{"rel
 
 All mutation commands require an explicit `expected_revision`; stale writers
 receive a structured error and cannot overwrite valid state.
+
+Sensitive questions are escalated with `question` and resumed through the
+`resolve_question` operation. Completed goals are terminal and reject further
+state mutations.
