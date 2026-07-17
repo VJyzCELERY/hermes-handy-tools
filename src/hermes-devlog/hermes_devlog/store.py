@@ -166,23 +166,13 @@ class StateStore:
             updated["revision"] = expected + 1
             reject_secrets(updated)
             validate_state(updated)
-            state_bytes = self.state_path.read_bytes()
-            activity_bytes = self.activity_path.read_bytes()
-            try:
-                self._atomic_json(
-                    self.pending_path,
-                    self._activity_record(
-                        operation, updated["revision"], actor, verified
-                    ),
-                )
-                self._atomic_json(self.state_path, updated)
-                self._activity(operation, updated["revision"], actor, verified)
-                self.pending_path.unlink(missing_ok=True)
-            except Exception:
-                self.state_path.write_bytes(state_bytes)
-                self.activity_path.write_bytes(activity_bytes)
-                self.pending_path.unlink(missing_ok=True)
-                raise
+            self._atomic_json(
+                self.pending_path,
+                self._activity_record(operation, updated["revision"], actor, verified),
+            )
+            self._atomic_json(self.state_path, updated)
+            self._activity(operation, updated["revision"], actor, verified)
+            self.pending_path.unlink(missing_ok=True)
         return updated
 
     def set_next_action(self, action: str, expected_revision: int) -> dict:

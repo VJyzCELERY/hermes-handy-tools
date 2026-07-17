@@ -735,12 +735,12 @@ def test_child_policy_inherits(tmp_path, monkeypatch):
         "discovered_work": True,
     }
 
-def test_failed_mutation_activity_append_rolls_back(tmp_path, monkeypatch):
+def test_failed_mutation_activity_append_recovers_completed_commit(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(payload())
     store = StateStore.from_goal("demo-goal")
-    state_before = store.state_path.read_bytes()
-    activity_before = store.activity_path.read_bytes()
     original = StateStore._activity
 
     def fail_after_append(self, *args, **kwargs):
@@ -751,8 +751,27 @@ def test_failed_mutation_activity_append_rolls_back(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         store.set_next_action("changed", expected_revision=1)
 
-    assert store.state_path.read_bytes() == state_before
-    assert store.activity_path.read_bytes() == activity_before
+    assert store.pending_path.exists()
+    assert store.read()["revision"] == 2
+    assert store.read()["next_action"] == "changed"
+    assert not store.pending_path.exists()
+
+
+def test_failed_mutation_activity_append_recovers_pending_commit(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    store = StateStore.from_goal("demo-goal")
+
+    def fail_before_append(self, *args, **kwargs):
+        raise OSError("injected activity failure")
+
+    monkeypatch.setattr(StateStore, "_activity", fail_before_append)
+    with pytest.raises(OSError):
+        store.set_next_action("changed", expected_revision=1)
+
+    assert store.read()["revision"] == 2
+    assert store.read()["next_action"] == "changed"
+    assert not store.pending_path.exists()
 
 
 def test_concurrent_read_returns_consistent_ledger(tmp_path, monkeypatch):
