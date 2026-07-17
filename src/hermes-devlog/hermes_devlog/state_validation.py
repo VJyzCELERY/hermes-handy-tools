@@ -12,6 +12,7 @@ from .validation import (
     QUESTION_STATUSES,
     SENSITIVE_QUESTION_CLASSES,
     authority_reference,
+    extra_metadata,
     identifier,
     integration_gate,
     json_value,
@@ -207,13 +208,14 @@ def _validate_dependencies(value: object, nodes: Mapping) -> None:
         raise CoordinatorError("invalid_state", "goal dependencies must be a list")
     graph = {node_id: [] for node_id in nodes}
     for edge in value:
-        item = strict_mapping(edge, {"blocker", "blocked"}, "dependency")
+        item = strict_mapping(edge, {"blocker", "blocked", "extra"}, "dependency")
         if not all(isinstance(item.get(key), str) for key in ("blocker", "blocked")):
             raise CoordinatorError(
                 "invalid_state", "dependency endpoints must be strings"
             )
         if item["blocker"] not in nodes or item["blocked"] not in nodes:
             raise CoordinatorError("invalid_state", "dependency endpoint is missing")
+        extra_metadata(item.get("extra", {}), "dependency.extra")
         graph[item["blocker"]].append(item["blocked"])
     _validate_acyclic(graph, "dependency graph must be acyclic")
 
@@ -251,6 +253,8 @@ def _validate_phase_runs(value: object, nodes: Mapping) -> None:
         "next_action",
         "status",
         "question_status",
+        "route",
+        "extra",
     }
     if not isinstance(value, list):
         raise CoordinatorError("invalid_state", "phase_runs must be a list")
@@ -258,7 +262,11 @@ def _validate_phase_runs(value: object, nodes: Mapping) -> None:
     session_attempts = {}
     for run in value:
         item = strict_mapping(run, fields, "phase_run")
-        if set(item) != fields or item["phase"] not in PHASES:
+        if (
+            not set(item) <= fields
+            or not (fields - {"extra"}) <= set(item)
+            or item["phase"] not in PHASES
+        ):
             raise CoordinatorError("invalid_state", "phase run is incomplete")
         if (
             not isinstance(item["attempt"], int)
@@ -271,6 +279,8 @@ def _validate_phase_runs(value: object, nodes: Mapping) -> None:
             "attempt",
             "expected_evidence",
             "observed_evidence",
+            "route",
+            "extra",
         }:
             if not isinstance(item[field], str) or not item[field]:
                 raise CoordinatorError("invalid_state", f"phase run {field} is invalid")
@@ -292,6 +302,14 @@ def _validate_phase_runs(value: object, nodes: Mapping) -> None:
                 "invalid_state", "phase session and attempt cross work items"
             )
         identifier(item["worker_role"], "phase_run.worker_role")
+        route = item["route"]
+        if not isinstance(route, Mapping):
+            raise CoordinatorError("invalid_state", "phase run route is invalid")
+        if set(route) != {"model", "reasoning", "agent"} or any(
+            route[field] != item[field] for field in route
+        ):
+            raise CoordinatorError("invalid_state", "phase run route is invalid")
+        extra_metadata(item.get("extra", {}), "phase_run.extra")
         if item["work_item_id"] not in nodes:
             raise CoordinatorError("invalid_state", "phase run work item is missing")
         normalized_absolute_path(
@@ -307,12 +325,12 @@ def _validate_phase_runs(value: object, nodes: Mapping) -> None:
 
 
 def _validate_reviews(value: object) -> None:
-    fields = {"head", "base", "diff", "findings", "valid", "phase"}
+    fields = {"head", "base", "diff", "findings", "valid", "phase", "extra"}
     if not isinstance(value, list):
         raise CoordinatorError("invalid_state", "reviews must be a list")
     for review in value:
         item = strict_mapping(review, fields, "review")
-        if set(item) != fields:
+        if not set(item) <= fields or not (fields - {"extra"}) <= set(item):
             raise CoordinatorError("invalid_state", "review binding is invalid")
         for field in ("head", "base", "diff"):
             review_identity(item[field], f"review.{field}")
@@ -323,6 +341,7 @@ def _validate_reviews(value: object) -> None:
         if item["phase"] not in PHASES:
             raise CoordinatorError("invalid_state", "review phase is unsupported")
         json_value(item["findings"], "review.findings")
+        extra_metadata(item.get("extra", {}), "review.extra")
 
 
 def _validate_questions(value: object) -> None:
@@ -335,6 +354,7 @@ def _validate_questions(value: object) -> None:
         "question_class",
         "authority_reference",
         "status",
+        "extra",
     }
     classes = {
         "general",
@@ -363,6 +383,7 @@ def _validate_question_fields(item: dict, classes: set[str]) -> None:
         raise CoordinatorError("invalid_state", "question record is incomplete")
     if item["question_class"] not in classes:
         raise CoordinatorError("invalid_state", "question class is unsupported")
+    extra_metadata(item.get("extra", {}), "question.extra")
     if "answer" in item and not isinstance(item["answer"], str):
         raise CoordinatorError("invalid_state", "question answer is invalid")
     if "escalate" in item and not isinstance(item["escalate"], bool):
@@ -465,9 +486,10 @@ def validate_state(state: object) -> dict:
         "capacity",
         "policy",
         "completion",
+        "extra",
     }
     data = strict_mapping(state, allowed, "state")
-    if set(data) != allowed:
+    if not set(data) <= allowed or not (allowed - {"extra"}) <= set(data):
         raise CoordinatorError("invalid_state", "state schema is incomplete")
     if isinstance(data.get("schema_version"), bool) or data.get("schema_version") != 1:
         raise CoordinatorError(
@@ -499,4 +521,7 @@ def validate_state(state: object) -> dict:
     _validate_questions(data.get("questions"))
     _validate_discovered_work(data.get("discovered_work"))
     _validate_gates_and_completion(data.get("gates"), data.get("completion"))
+    if "extra" not in data:
+        data["extra"] = {}
+    extra_metadata(data["extra"], "state.extra")
     return data

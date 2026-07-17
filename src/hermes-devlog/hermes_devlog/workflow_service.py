@@ -12,6 +12,7 @@ from .service_common import (
 )
 from .validation import (
     authority_reference,
+    extra_metadata,
     identifier,
     integration_gate,
     json_value,
@@ -26,8 +27,12 @@ def review(goal_id: str, data: Mapping, revision: int) -> dict:
         raise CoordinatorError("invalid_object", "review data must be an object")
     reject_secrets(data)
     required = {"head", "base", "diff", "findings"}
-    if set(data) != required or not all(
+    if (
+        not required <= set(data)
+        or set(data) - {"head", "base", "diff", "findings", "extra"}
+        or not all(
         isinstance(data[key], str) for key in required - {"findings"}
+        )
     ):
         raise CoordinatorError(
             "invalid_review", "review requires head, base, diff, and findings"
@@ -36,6 +41,7 @@ def review(goal_id: str, data: Mapping, revision: int) -> dict:
         raise CoordinatorError("invalid_review", "findings must be a list")
     for field in ("head", "base", "diff"):
         review_identity(data[field], f"review.{field}")
+    extra = extra_metadata(data.get("extra", {}), "review.extra")
 
     def change(state):
         for prior in state["reviews"]:
@@ -48,6 +54,7 @@ def review(goal_id: str, data: Mapping, revision: int) -> dict:
                 **dict(data),
                 "phase": state["phase"],
                 "valid": not bool(data["findings"]),
+                "extra": extra,
             }
         )
         if data["findings"]:
@@ -72,6 +79,7 @@ def question(goal_id: str, data: Mapping, revision: int) -> dict:
         "reason",
         "question_class",
         "authority_reference",
+        "extra",
     }
     if (
         set(data) - allowed
@@ -97,6 +105,7 @@ def question(goal_id: str, data: Mapping, revision: int) -> dict:
         if inferred_class in SENSITIVE_QUESTION_CLASSES
         else declared_class or inferred_class
     )
+    extra = extra_metadata(data.get("extra", {}), "question.extra")
 
     def change(state):
         matching_runs = [
@@ -127,6 +136,7 @@ def question(goal_id: str, data: Mapping, revision: int) -> dict:
             **dict(data),
             "question_class": question_class,
             "status": "needs_user" if escalated else "answered",
+            "extra": extra,
         }
         if "authority_reference" in data and not approved:
             item["escalate"] = True

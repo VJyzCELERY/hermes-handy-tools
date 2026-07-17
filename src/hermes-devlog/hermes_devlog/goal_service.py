@@ -10,6 +10,7 @@ from .service_common import (
 )
 from .validation import (
     PROFILE_MATCH_RANK,
+    extra_metadata,
     identifier,
     json_value,
     normalized_policy,
@@ -227,10 +228,17 @@ def set_goal_disposition(
 
     return _mutate(goal_id, revision, "goal_disposition", change)
 
-def add_dependency(goal_id: str, blocker: str, blocked: str, revision: int) -> dict:
+def add_dependency(
+    goal_id: str,
+    blocker: str,
+    blocked: str,
+    revision: int,
+    extra: Mapping | None = None,
+) -> dict:
     """Add a dependency edge while preserving DAG semantics."""
     identifier(blocker, "blocker")
     identifier(blocked, "blocked")
+    metadata = extra_metadata(extra or {}, "dependency.extra")
 
     def change(state):
         nodes = state["goal_graph"]["nodes"]
@@ -240,7 +248,7 @@ def add_dependency(goal_id: str, blocker: str, blocked: str, revision: int) -> d
             raise CoordinatorError(
                 "invalid_dependency", "the root goal cannot block dependencies"
             )
-        edge = {"blocker": blocker, "blocked": blocked}
+        edge = {"blocker": blocker, "blocked": blocked, "extra": metadata}
         edges = state["goal_graph"]["dependencies"]
         if edge in edges:
             raise CoordinatorError("duplicate_dependency", "dependency already exists")

@@ -41,6 +41,14 @@ def test_activation_persists_pinned_state(tmp_path, monkeypatch, capsys):
     assert result["state"]["revision"] == 1
     assert result["state"]["next_action"] == "begin_issue"
     assert (tmp_path / "dev-log" / "demo-goal" / "config.json").exists()
+    amendment = {
+        "goal_id": "demo-goal",
+        "patch": {"extra": {}},
+        "reason": "add metadata",
+        "expected_revision": 1,
+    }
+    assert main(["amend_state", json.dumps(amendment)]) == 0
+    assert main(["audit_validate", json.dumps({"goal_id": "demo-goal"})]) == 0
 
 
 def test_replacement_skill_is_between_three_and_five_kilobytes():

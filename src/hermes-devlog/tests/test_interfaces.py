@@ -415,8 +415,9 @@ def test_sensitive_question_can_be_resolved_then_resumed(tmp_path, monkeypatch):
             "question": "May I expand scope?",
             "answer": "Approved for the requested scope.",
             "question_class": "scope",
-            "authority_reference": "state:policy",
-            "status": "answered",
+                "authority_reference": "state:policy",
+                "status": "answered",
+                "extra": {},
         }
     ]
     phase_data = {

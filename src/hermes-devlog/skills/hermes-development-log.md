@@ -6,8 +6,8 @@ preserves resumable workflow state.
 
 ## Boundary
 
-The package writes versioned JSON state and append-only JSONL activity below
-`$HERMES_HOME/dev-log/<goal-id>/`. Every mutation is locked, atomic, and
+The package writes versioned JSON config/state and immutable hash-linked audit
+events below `$HERMES_HOME/dev-log/<goal-id>/`. Every mutation is locked, atomic, and
 revision-checked. Unknown fields, secret-shaped fields, unsafe identifiers,
 unsupported versions, invalid graph edges, permission broadening, illegal
 transitions, and stale evidence are rejected. A checkpoint always contains an
@@ -21,7 +21,7 @@ tmux, a subprocess, or a notification sender.
 
 ## Workflow
 
-Activate a goal with its immutable released template and commit, command
+Activate a goal with its released template and commit, command
 manifest hash, local snapshot, selected profile, matching mode, governing
 sources and permissions. Each route pins model, reasoning, and agent; agent
 defaults to `opencode`. The normal semantic baseline is
@@ -46,13 +46,15 @@ always a separately authorized external action.
 
 Use isolated `HERMES_HOME` when testing or developing a workflow.
 Activation creates the goal directory; provide the activation fields in one
-request. Treat the resulting `config.json` as immutable. Do not copy a
+request. Use reasoned, revision-checked `amend_config` or `amend_state` for a validated
+in-place correction; `extra` is a secret-free JSON object for opaque metadata.
+Phase route snapshots remain historical when routes are amended. Do not copy a
 repository template into the goal directory.
 
 Every later mutation names the goal and supplies the revision it observed.
 Read `status` or `next` again after a revision conflict; never retry a stale
 write with the same number. A failed validation or conflict must leave both
-`state.json` and `activity.jsonl` unchanged. Use a new revision only after
+`state.json` and the audit unchanged. Use a new revision only after
 inspecting the current state and deciding that the requested transition is
 still authorized.
 
@@ -74,14 +76,12 @@ eligibility observable; it does not authorize or perform the merge.
 
 ## Audit and recovery
 
-Successful activation and mutations append one JSONL activity record with a
-timestamp, actor, operation, resulting revision, and verified outcome.
-Treat the activity file as append-only evidence. If state or an activity record
-is malformed, stop and escalate rather than repairing it in place. Preserve
-the directory for investigation, report the exact next action, and let the
-owning Hermes workflow decide whether to discard and recreate the bounded
-goal. Never place credentials, tokens, passwords, private keys, or secret-like
-values in titles, findings, questions, evidence, commands, or reasons.
+Successful mutations write a hash-linked event at `audit/events/<revision>.json`
+and advance `audit/HEAD.json`. `audit_list` (100) returns summaries only;
+`audit_show` returns an event. If materialized config/state is damaged but the
+chain validates, use reasoned `audit_repair`, which records a new revision.
+Never place credentials, tokens, passwords, private keys, or secret-like values
+in titles, findings, questions, evidence, commands, or reasons.
 
 ## Resume checklist
 

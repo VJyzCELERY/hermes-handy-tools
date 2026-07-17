@@ -522,8 +522,7 @@ def test_concurrent_mutation_allows_one_revision_winner(tmp_path, monkeypatch):
     state = StateStore.from_goal("demo-goal").read()
     assert state["revision"] == 2
     assert (
-        len(StateStore.from_goal("demo-goal").activity_path.read_text().splitlines())
-        == 2
+        len(StateStore.from_goal("demo-goal").audit_list()) == 2
     )
 
 

@@ -43,8 +43,15 @@ For a profile-specific installation, replace `$HOME/.hermes` with that
 profile's `HERMES_HOME` in both commands and run Hermes with the matching
 profile.
 
-All mutation commands require an explicit `expected_revision`; stale writers
-receive a structured error and cannot overwrite valid state.
+Later `amend_config` and `amend_state` operations require a non-empty reason
+and `expected_revision`, validate the complete
+resulting schema and semantics, and accept optional secret-free JSON-object
+`extra` metadata. Historical phase runs retain their route after route amendments.
+
+Each revision is an immutable hash-linked JSON event at
+`audit/events/<revision>.json`, with `audit/HEAD.json`. Use bounded latest-first
+`audit_list` (maximum 100) returns compact summaries; `audit_show` returns an
+event snapshot. `audit_repair` requires a reason and records a new revision.
 
 Sensitive questions are escalated with `question` and resumed through the
 `resolve_question` operation. Completed goals are terminal and reject further

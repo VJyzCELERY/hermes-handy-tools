@@ -34,6 +34,16 @@ def test_plugin_registers_json_serializing_hermes_tool(tmp_path, monkeypatch):
     assert context.registration is not None
     assert context.registration["name"] == "hermes_devlog"
     assert context.registration["toolset"] == "hermes-devlog"
+    schema = context.registration["schema"]
+    operations = schema["parameters"]["properties"]["operation"]["enum"]
+    assert {
+        "amend_config",
+        "amend_state",
+        "audit_list",
+        "audit_show",
+        "audit_validate",
+        "audit_repair",
+    } <= set(operations)
 
     result = context.registration["handler"](
         {"operation": "status", "payload": {"goal_id": "missing"}}

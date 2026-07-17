@@ -21,6 +21,12 @@ TOOL_SCHEMA = {
                 "type": "string",
                 "enum": [
                     "activate",
+                    "amend_config",
+                    "amend_state",
+                    "audit_list",
+                    "audit_show",
+                    "audit_validate",
+                    "audit_repair",
                     "status",
                     "next",
                     "goal",
@@ -38,7 +44,10 @@ TOOL_SCHEMA = {
             },
             "payload": {
                 "type": "object",
-                "description": "Operation-specific JSON object accepted by the ledger.",
+                "description": (
+                    "Operation-specific JSON object accepted by the ledger. "
+                    "Operations use role-specific model, reasoning, and agent routes."
+                ),
             },
         },
         "required": ["operation", "payload"],

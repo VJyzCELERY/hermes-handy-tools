@@ -279,10 +279,23 @@ def json_value(value: object, path: str) -> None:
     raise CoordinatorError("invalid_state", f"{path} is not JSON-compatible")
 
 
+def extra_metadata(value: object, path: str = "extra") -> dict:
+    """Validate opaque, secret-free JSON metadata without widening schemas."""
+    if not isinstance(value, Mapping):
+        raise CoordinatorError("invalid_extra", f"{path} must be an object")
+    reject_secrets(value, path)
+    json_value(value, path)
+    return dict(value)
+
+
 def integration_gate(value: object) -> dict:
     """Validate one bounded integration-gate record."""
-    data = strict_mapping(value, {"id", "status", "evidence"}, "integration_gate")
-    if set(data) != {"id", "status", "evidence"}:
+    data = strict_mapping(
+        value, {"id", "status", "evidence", "extra"}, "integration_gate"
+    )
+    if not set(data) <= {"id", "status", "evidence", "extra"} or not {
+        "id", "status", "evidence"
+    } <= set(data):
         raise CoordinatorError(
             "invalid_gate", "integration gate records require id, status, and evidence"
         )
@@ -290,6 +303,8 @@ def integration_gate(value: object) -> dict:
     if data["status"] not in {"open", "resolved"}:
         raise CoordinatorError("invalid_gate", "integration gate status is unsupported")
     json_value(data["evidence"], "integration_gate.evidence")
+    if "extra" in data:
+        data["extra"] = extra_metadata(data["extra"], "integration_gate.extra")
     return data
 
 
@@ -310,6 +325,7 @@ def activation_payload(payload: object) -> dict:
             "source_bindings",
             "completion_contract",
             "contract",
+            "extra",
         },
         "activation",
     )
@@ -345,6 +361,8 @@ def activation_payload(payload: object) -> dict:
         )
     json_value(contracts[0], "activation.contract")
     _policy(data.get("policy", {}))
+    if "extra" in data:
+        data["extra"] = extra_metadata(data["extra"], "activation.extra")
     return data
 
 
@@ -363,4 +381,9 @@ def validate_state(state: object) -> dict:
 
     return validate(state)
 
-__all__ = ["activation_payload", "expected_revision", "validate_state"]
+__all__ = [
+    "activation_payload",
+    "expected_revision",
+    "extra_metadata",
+    "validate_state",
+]

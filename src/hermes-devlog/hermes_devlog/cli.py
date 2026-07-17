@@ -9,6 +9,12 @@ from .validation import strict_mapping
 
 OPERATIONS = {
     "activate",
+    "amend_config",
+    "amend_state",
+    "audit_list",
+    "audit_show",
+    "audit_validate",
+    "audit_repair",
     "status",
     "next",
     "goal",
@@ -36,7 +42,6 @@ def _dispatch(operation: str, payload: dict) -> dict:
             "template",
             "profile",
             "routes",
-            "harness",
             "permissions",
             "policy",
             "repositories",
@@ -46,6 +51,24 @@ def _dispatch(operation: str, payload: dict) -> dict:
         },
         "status": {"goal_id"},
         "next": {"goal_id"},
+        "amend_config": {
+            "goal_id",
+            "patch",
+            "reason",
+            "audit_extra",
+            "expected_revision",
+        },
+        "amend_state": {
+            "goal_id",
+            "patch",
+            "reason",
+            "audit_extra",
+            "expected_revision",
+        },
+        "audit_list": {"goal_id", "limit"},
+        "audit_show": {"goal_id", "revision"},
+        "audit_validate": {"goal_id"},
+        "audit_repair": {"goal_id", "reason", "audit_extra", "expected_revision"},
         "goal": {"goal_id", "node", "expected_revision"},
         "goal_disposition": {
             "goal_id",
@@ -53,7 +76,13 @@ def _dispatch(operation: str, payload: dict) -> dict:
             "disposition",
             "expected_revision",
         },
-        "dependency": {"goal_id", "blocker", "blocked", "expected_revision"},
+        "dependency": {
+            "goal_id",
+            "blocker",
+            "blocked",
+            "extra",
+            "expected_revision",
+        },
         "phase": {"goal_id", "data", "expected_revision"},
         "review": {"goal_id", "data", "expected_revision"},
         "question": {"goal_id", "data", "expected_revision"},
@@ -70,7 +99,36 @@ def _dispatch(operation: str, payload: dict) -> dict:
         return service.status(goal_id)
     if operation == "next":
         return service.next_action(goal_id)
+    if operation == "audit_list":
+        return service.audit_list(goal_id, payload.get("limit", 20))
+    if operation == "audit_show":
+        return service.audit_show(goal_id, payload["revision"])
+    if operation == "audit_validate":
+        return service.audit_validate(goal_id)
     revision = payload["expected_revision"]
+    if operation == "amend_config":
+        return service.amend_config(
+            goal_id,
+            payload["patch"],
+            reason=payload["reason"],
+            expected_revision=revision,
+            audit_extra=payload.get("audit_extra"),
+        )
+    if operation == "amend_state":
+        return service.amend_state(
+            goal_id,
+            payload["patch"],
+            reason=payload["reason"],
+            expected_revision=revision,
+            audit_extra=payload.get("audit_extra"),
+        )
+    if operation == "audit_repair":
+        return service.audit_repair(
+            goal_id,
+            reason=payload["reason"],
+            expected_revision=revision,
+            audit_extra=payload.get("audit_extra"),
+        )
     if operation == "goal":
         return service.add_goal(goal_id, payload["node"], revision)
     if operation == "goal_disposition":
@@ -79,7 +137,11 @@ def _dispatch(operation: str, payload: dict) -> dict:
         )
     if operation == "dependency":
         return service.add_dependency(
-            goal_id, payload["blocker"], payload["blocked"], revision
+            goal_id,
+            payload["blocker"],
+            payload["blocked"],
+            revision,
+            payload.get("extra"),
         )
     if operation in {"phase", "review", "question", "resolve_question"}:
         return getattr(service, operation)(goal_id, payload["data"], revision)

@@ -129,13 +129,11 @@ def test_activity_records_are_timestamped_attributed_and_verified(
     gate("demo", "final_verification", False, 1)
     from hermes_devlog.store import StateStore
 
-    records = [
-        json.loads(line)
-        for line in StateStore.from_goal("demo").activity_path.read_text().splitlines()
-    ]
+    records = StateStore.from_goal("demo").audit_list()
     assert len(records) == 2
     assert all(
-        set(record) == {"timestamp", "actor", "operation", "revision", "verified"}
+        {"timestamp", "actor", "operation", "revision", "verified", "hash"}
+        <= set(record)
         and record["actor"]
         and record["verified"] is True
         for record in records
@@ -164,7 +162,6 @@ def test_activity_records_are_timestamped_attributed_and_verified(
             },
             "invalid_routes",
         ),
-        ("harness", "claude-code", "unknown_field"),
         ("permissions", {"implement": "yes"}, "invalid_permissions"),
         ("policy", {"capacity": 0}, "invalid_policy"),
     ],

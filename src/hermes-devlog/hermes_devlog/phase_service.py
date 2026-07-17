@@ -12,6 +12,7 @@ from .validation import (
     QUESTION_STATUSES,
     WORKER_ROUTES,
     expected_revision,
+    extra_metadata,
     identifier,
     json_value,
     normalized_absolute_path,
@@ -43,6 +44,7 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
         "next_action",
         "status",
         "question_status",
+        "extra",
     }
     if set(data) - allowed:
         raise CoordinatorError("unknown_field", "unknown phase field")
@@ -107,6 +109,7 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
         raise CoordinatorError(
             "question_unresolved", "completed phase run cannot await a question"
         )
+    extra = extra_metadata(data.get("extra", {}), "phase.extra")
     phases = [
         "issue",
         "plan",
@@ -250,6 +253,8 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
             **dict(data),
             "status": phase_status,
             "question_status": question_status,
+            "route": dict(pinned),
+            "extra": extra,
         }
         if matching_run is None:
             state["phase_runs"].append(run)
