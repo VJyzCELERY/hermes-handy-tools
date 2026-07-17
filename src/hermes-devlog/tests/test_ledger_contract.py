@@ -1,6 +1,7 @@
 """Approved mutable-ledger contract regressions."""
 
 import json
+from copy import deepcopy
 
 import pytest
 
@@ -13,6 +14,7 @@ from hermes_devlog.service import (
     audit_show,
     audit_validate,
     phase,
+    status,
 )
 from hermes_devlog.store import StateStore
 
@@ -91,3 +93,33 @@ def test_contract_amendments_are_reasoned_replayable_and_compact(tmp_path, monke
     assert repaired["state"]["revision"] == 4
     assert audit_show("contract-goal", 4)["event"]["operation"] == "audit_repair"
     assert audit_validate("contract-goal")["valid"] is True
+
+
+def test_state_amendment_cannot_broaden_root_authority(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(_payload())
+    current = status("contract-goal")["state"]
+    graph = deepcopy(current["goal_graph"])
+    graph["nodes"]["contract-goal"]["permissions"]["merge"] = True
+
+    with pytest.raises(CoordinatorError, match="authority"):
+        amend_state(
+            "contract-goal",
+            {"goal_graph": graph},
+            reason="attempt to broaden authority",
+            expected_revision=1,
+        )
+
+    assert status("contract-goal")["state"]["revision"] == 1
+
+
+def test_bounded_audit_list_does_not_traverse_full_history(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(_payload())
+    store = StateStore.from_goal("contract-goal")
+    store._read_audit = lambda: pytest.fail("audit list traversed history")
+
+    events = store.audit_list(limit=1)
+
+    assert len(events) == 1
+    assert events[0]["revision"] == 1

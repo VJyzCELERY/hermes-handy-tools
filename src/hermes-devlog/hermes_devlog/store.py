@@ -115,6 +115,7 @@ class StateStore:
             updated = change(_copy(state))
             updated["revision"] = expected + 1
             self._validate_state(updated)
+            self._validate_state_authority(updated, config)
             self._commit(
                 config,
                 updated,
@@ -152,8 +153,10 @@ class StateStore:
             before = _copy(config)
             updated_config = change(_copy(config))
             self._validate_config(updated_config)
+            self._synchronize_root_authority(state, updated_config)
             state["revision"] = expected + 1
             self._validate_state(state)
+            self._validate_state_authority(state, updated_config)
             self._commit(
                 updated_config,
                 state,
@@ -206,8 +209,13 @@ class StateStore:
                 "invalid_limit", f"limit must be between 1 and {MAX_AUDIT_EVENTS}"
             )
         with self.locked():
-            events = self._read_audit()
-        return [_audit_summary(event) for event in reversed(events[-limit:])]
+            head = self._read_audit_head()
+            start = max(1, head["revision"] - limit + 1)
+            events = [
+                self._read_event(revision)
+                for revision in range(head["revision"], start - 1, -1)
+            ]
+        return [_audit_summary(event) for event in events]
 
     def audit_show(self, revision: int) -> dict:
         """Return one validated audited revision."""
@@ -217,10 +225,10 @@ class StateStore:
                 "invalid_revision", "audit revision must be positive"
             )
         with self.locked():
-            events = self._read_audit()
-            if revision > len(events):
+            head = self._read_audit_head()
+            if revision > head["revision"]:
                 raise CoordinatorError("not_found", "audit revision does not exist")
-            return events[revision - 1]
+            return self._read_event(revision)
 
     def audit_validate(self) -> dict:
         """Validate the audit chain and its current materialized snapshots."""
@@ -300,6 +308,49 @@ class StateStore:
             return activation_payload(payload)
         except CoordinatorError as exc:
             raise CoordinatorError("invalid_state", "goal config is invalid") from exc
+
+    def _validate_state_authority(self, state: dict, config: dict) -> None:
+        """Reject state amendments that broaden or drift from config authority."""
+        root = state["goal_graph"]["nodes"].get(config["goal_id"])
+        contract_field = (
+            "completion_contract"
+            if "completion_contract" in config
+            else "contract"
+        )
+        fields = (
+            "permissions",
+            "policy",
+            "profile",
+            "repositories",
+            "source_bindings",
+            contract_field,
+        )
+        if not isinstance(root, dict) or root.get("parent_id") is not None or any(
+            root.get(field) != config.get(field) for field in fields
+        ):
+            raise CoordinatorError(
+                "invalid_state", "state root authority differs from config"
+            )
+
+    def _synchronize_root_authority(self, state: dict, config: dict) -> None:
+        """Refresh state fields derived from a valid mutable config amendment."""
+        root = state["goal_graph"]["nodes"][config["goal_id"]]
+        contract_field = (
+            "completion_contract"
+            if "completion_contract" in config
+            else "contract"
+        )
+        for field in (
+            "permissions",
+            "policy",
+            "profile",
+            "repositories",
+            "source_bindings",
+            contract_field,
+        ):
+            root[field] = _copy(config[field])
+        state["policy"] = _copy(config["policy"])
+        state["capacity"] = config["policy"]["capacity"]
 
     def _check_revision(self, state: dict, expected: int) -> None:
         if state["revision"] != expected:
@@ -397,6 +448,33 @@ class StateStore:
         self._atomic_json(self.state_path, state)
         self._write_event(event)
         self.pending_path.unlink()
+
+    def _read_audit_head(self) -> dict:
+        """Read only the mutable audit head for bounded audit access."""
+        try:
+            head = self._read_json(self.head_path, "audit head")
+        except CoordinatorError as exc:
+            raise CoordinatorError(
+                "invalid_state", "audit head cannot be read"
+            ) from exc
+        if not isinstance(head, dict) or set(head) != {"revision", "hash"}:
+            raise CoordinatorError("invalid_state", "audit head is invalid")
+        if (
+            not isinstance(head["revision"], int)
+            or isinstance(head["revision"], bool)
+            or head["revision"] < 1
+            or not isinstance(head["hash"], str)
+        ):
+            raise CoordinatorError("invalid_state", "audit head is invalid")
+        return head
+
+    def _read_event(self, revision: int) -> dict:
+        """Read and authenticate a single audit event without traversing history."""
+        event = self._read_json(self.events_path / f"{revision}.json", "audit event")
+        if not isinstance(event, dict):
+            raise CoordinatorError("invalid_state", "audit event is invalid")
+        self._validate_event(event, revision, event.get("previous_hash"))
+        return event
 
     def _read_audit(self) -> list[dict]:
         try:
