@@ -23,7 +23,7 @@ from .validation import (
 )
 
 
-def _validate_goal_graph(graph: object) -> dict:
+def _validate_goal_graph(graph: object, parent_policy: dict) -> dict:
     graph = strict_mapping(graph, {"nodes", "dependencies"}, "goal_graph")
     nodes = graph.get("nodes")
     if not isinstance(nodes, Mapping) or not nodes:
@@ -35,6 +35,7 @@ def _validate_goal_graph(graph: object) -> dict:
     ]
     if len(roots) != 1:
         raise CoordinatorError("invalid_state", "goal graph must have exactly one root")
+    _validate_policy_narrowing(nodes[roots[0]]["policy"], parent_policy)
     if any(
         node.get("parent_id") is not None and node.get("parent_id") not in nodes
         for node in nodes.values()
@@ -43,7 +44,9 @@ def _validate_goal_graph(graph: object) -> dict:
     for node in nodes.values():
         parent_id = node.get("parent_id")
         if parent_id is not None:
-            parent_permissions = nodes[parent_id]["permissions"]
+            parent = nodes[parent_id]
+            _validate_policy_narrowing(node["policy"], parent["policy"])
+            parent_permissions = parent["permissions"]
             if set(node["permissions"]) != set(parent_permissions) or any(
                 value and not parent_permissions[key]
                 for key, value in node["permissions"].items()
@@ -60,6 +63,15 @@ def _validate_goal_graph(graph: object) -> dict:
     )
     _validate_dependencies(graph.get("dependencies"), nodes)
     return nodes
+
+
+def _validate_policy_narrowing(child: dict, parent: dict) -> None:
+    if child["capacity"] > parent["capacity"] or any(
+        child[field] and not parent[field] for field in POLICY_FIELDS - {"capacity"}
+    ):
+        raise CoordinatorError(
+            "invalid_state", "child policy broadens parent authority"
+        )
 
 
 def _validate_goal_node(node_id: object, value: object) -> None:
@@ -406,11 +418,15 @@ def validate_state(state: object) -> dict:
     data = strict_mapping(state, allowed, "state")
     if set(data) != allowed:
         raise CoordinatorError("invalid_state", "state schema is incomplete")
-    if data.get("schema_version") != 1:
+    if isinstance(data.get("schema_version"), bool) or data.get("schema_version") != 1:
         raise CoordinatorError(
             "unsupported_version", "state schema version is unsupported"
         )
-    if not isinstance(data.get("revision"), int) or data["revision"] < 1:
+    if (
+        not isinstance(data.get("revision"), int)
+        or isinstance(data["revision"], bool)
+        or data["revision"] < 1
+    ):
         raise CoordinatorError("invalid_state", "state revision must be positive")
     if data.get("phase") not in PHASES:
         raise CoordinatorError("invalid_state", "state phase is unsupported")
@@ -425,7 +441,7 @@ def validate_state(state: object) -> dict:
     policy = normalized_policy(data.get("policy"))
     if set(data["policy"]) != POLICY_FIELDS or data["capacity"] != policy["capacity"]:
         raise CoordinatorError("invalid_state", "state policy and capacity disagree")
-    nodes = _validate_goal_graph(data.get("goal_graph"))
+    nodes = _validate_goal_graph(data.get("goal_graph"), policy)
     _validate_work_items(data.get("work_items"), nodes)
     _validate_phase_runs(data.get("phase_runs"), nodes)
     _validate_reviews(data.get("reviews"))

@@ -286,6 +286,7 @@ def test_integration_gate_accepts_json_evidence():
         lambda state: state["goal_graph"]["nodes"]["demo"].pop("policy"),
         lambda state: state["goal_graph"]["nodes"]["demo"].update(title=1),
         lambda state: state["goal_graph"]["nodes"]["demo"].update(disposition="bad"),
+        lambda state: state["goal_graph"]["nodes"]["demo"].update(policy={}),
         lambda state: state["goal_graph"]["nodes"]["demo"].update(repositories=[1]),
         lambda state: state["goal_graph"]["nodes"]["demo"].update(source_bindings={}),
         lambda state: state["goal_graph"]["nodes"]["demo"].update(contract=[]),
@@ -297,6 +298,8 @@ def test_integration_gate_accepts_json_evidence():
             {"blocker": "missing", "blocked": "demo"}
         ),
         lambda state: state.update(work_items=[]),
+        lambda state: state["work_items"]["demo"].update(phase="bad"),
+        lambda state: state["work_items"]["demo"].update(next_action=""),
         lambda state: state["work_items"].update(bad=[]),
         lambda state: state.update(phase_runs={}),
         lambda state: state.update(reviews={}),
@@ -310,3 +313,36 @@ def test_persisted_state_rejects_invalid_shapes(tmp_path, monkeypatch, mutate):
     mutate(invalid)
     with pytest.raises(CoordinatorError):
         validate_state(invalid)
+
+
+@pytest.mark.parametrize("field", ["schema_version", "revision"])
+def test_persisted_state_rejects_boolean_version_fields(tmp_path, monkeypatch, field):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    from hermes_devlog.store import StateStore
+
+    path = StateStore.from_goal("demo").state_path
+    state = json.loads(path.read_text())
+    state[field] = True
+    path.write_text(json.dumps(state))
+
+    with pytest.raises(CoordinatorError):
+        status("demo")
+
+
+@pytest.mark.parametrize(("field", "value"), [("merge", True), ("capacity", 2)])
+def test_persisted_child_policy_cannot_broaden_parent(
+    tmp_path, monkeypatch, field, value
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(activation())
+    add_goal("demo", {"id": "child", "title": "Child"}, 1)
+    from hermes_devlog.store import StateStore
+
+    path = StateStore.from_goal("demo").state_path
+    state = json.loads(path.read_text())
+    state["goal_graph"]["nodes"]["child"]["policy"][field] = value
+    path.write_text(json.dumps(state))
+
+    with pytest.raises(CoordinatorError):
+        status("demo")
