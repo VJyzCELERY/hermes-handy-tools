@@ -9,12 +9,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .errors import CoordinatorError
+from .state_validation import validate_state
 from .validation import (
     activation_payload,
     expected_revision,
     identifier,
     reject_secrets,
-    validate_state,
 )
 
 
@@ -50,7 +50,9 @@ class StateStore:
                 "unsupported_version", "state schema version is unsupported"
             )
         reject_secrets(state)
-        return validate_state(state)
+        validated = validate_state(state)
+        self._validate_activity(validated["revision"])
+        return validated
 
     def read_config(self) -> dict:
         """Read and validate the immutable activation configuration."""
@@ -134,8 +136,15 @@ class StateStore:
             updated = change(json.loads(json.dumps(state)))
             updated["revision"] = expected + 1
             validate_state(updated)
-            self._atomic_json(self.state_path, updated)
-            self._activity(operation, updated["revision"], actor, verified)
+            state_bytes = self.state_path.read_bytes()
+            activity_bytes = self.activity_path.read_bytes()
+            try:
+                self._atomic_json(self.state_path, updated)
+                self._activity(operation, updated["revision"], actor, verified)
+            except Exception:
+                self.state_path.write_bytes(state_bytes)
+                self.activity_path.write_bytes(activity_bytes)
+                raise
         return updated
 
     def set_next_action(self, action: str, expected_revision: int) -> dict:
@@ -180,3 +189,43 @@ class StateStore:
             raise CoordinatorError("invalid_activity", "activity record is invalid")
         with self.activity_path.open("a") as handle:
             handle.write(json.dumps(record, allow_nan=False, sort_keys=True) + "\n")
+
+    def _validate_activity(self, state_revision: int) -> None:
+        """Validate the append-only activity ledger against state revision."""
+        try:
+            lines = self.activity_path.read_text().splitlines()
+        except (FileNotFoundError, OSError, UnicodeDecodeError) as exc:
+            raise CoordinatorError(
+                "invalid_state", "activity ledger cannot be read"
+            ) from exc
+        if len(lines) != state_revision:
+            raise CoordinatorError(
+                "invalid_state", "activity ledger revision sequence is incomplete"
+            )
+        fields = {"timestamp", "actor", "operation", "revision", "verified"}
+        for expected, line in enumerate(lines, start=1):
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise CoordinatorError(
+                    "invalid_state", "activity ledger contains invalid JSON"
+                ) from exc
+            if not isinstance(record, dict) or set(record) != fields:
+                raise CoordinatorError(
+                    "invalid_state", "activity ledger record is invalid"
+                )
+            if (
+                not isinstance(record["timestamp"], str)
+                or not record["timestamp"]
+                or not isinstance(record["actor"], str)
+                or not record["actor"]
+                or not isinstance(record["operation"], str)
+                or not record["operation"]
+                or not isinstance(record["revision"], int)
+                or isinstance(record["revision"], bool)
+                or record["revision"] != expected
+                or not isinstance(record["verified"], bool)
+            ):
+                raise CoordinatorError(
+                    "invalid_state", "activity ledger record is invalid"
+                )
