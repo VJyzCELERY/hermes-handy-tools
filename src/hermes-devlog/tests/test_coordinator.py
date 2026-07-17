@@ -585,6 +585,65 @@ def test_completion_requires_implementation_review_phase(tmp_path, monkeypatch):
     assert error.value.code == "incomplete_workflow"
 
 
+def test_final_verification_can_enter_remediation(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    phase_data = {
+        "phase": "plan",
+        "owner": "planner",
+        "attempt": 1,
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "model",
+        "variant": "high",
+        "session_id": "plan-session",
+        "process_id": "plan-process",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "continue",
+    }
+    phase("demo-goal", phase_data, 1)
+    phase_data.update(
+        {
+            "phase": "plan_review",
+            "attempt": 2,
+            "worker_role": "reviewer",
+            "session_id": "plan-review-session",
+            "process_id": "plan-review-process",
+        }
+    )
+    phase("demo-goal", phase_data, 2)
+    phase_data.update({"phase": "implement", "attempt": 3})
+    phase("demo-goal", phase_data, 3)
+    phase_data.update(
+        {
+            "phase": "implementation_review",
+            "attempt": 4,
+            "session_id": "implementation-review-session",
+            "process_id": "implementation-review-process",
+        }
+    )
+    phase("demo-goal", phase_data, 4)
+    review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 5)
+    phase_data.update({"phase": "pr_delivery", "attempt": 5})
+    phase("demo-goal", phase_data, 6)
+    phase_data.update({"phase": "final_verification", "attempt": 6})
+    phase("demo-goal", phase_data, 7)
+    gate("demo-goal", "final_verification", True, 8)
+
+    result = phase(
+        "demo-goal",
+        {**phase_data, "phase": "remediation", "attempt": 7},
+        9,
+    )
+
+    assert result["state"]["phase"] == "remediation"
+    assert result["state"]["gates"]["final_verification"] is False
+    assert result["state"]["reviews"][0]["valid"] is False
+
+
 def test_phase_requires_a_complete_resume_record(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     activate(payload())

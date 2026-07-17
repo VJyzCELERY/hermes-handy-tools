@@ -159,7 +159,7 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
             },
             "remediation": {"remediation", "implement", "implementation_review"},
             "pr_delivery": {"pr_delivery", "final_verification"},
-            "final_verification": {"final_verification", "merge_ready"},
+            "final_verification": {"final_verification", "remediation", "merge_ready"},
             "merge_ready": {"merge_ready"},
         }
         if target not in allowed_targets[current]:
