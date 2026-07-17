@@ -45,7 +45,12 @@ def activation(goal_id="demo", *, merge=False):
             "snapshot": "snapshots/demo",
         },
         "profile": {"name": "fallback", "match": "fallback", "sources": []},
-        "route": {"model": "model", "variant": "high"},
+        "routes": {
+            "planner": {"model": "model", "variant": "high"},
+            "reviewer": {"model": "model", "variant": "high"},
+            "worker": {"model": "model", "variant": "high"},
+        },
+        "harness": "opencode",
         "permissions": {"implement": True, "merge": merge},
         "policy": {"merge": merge},
         "repositories": ["org/demo"],

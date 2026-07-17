@@ -93,7 +93,12 @@ def payload():
         "title": "Demo goal",
         "template": template(),
         "profile": {"name": "native", "match": "native", "sources": []},
-        "route": {"model": "model", "variant": "high"},
+        "routes": {
+            "planner": {"model": "model", "variant": "high"},
+            "reviewer": {"model": "model", "variant": "high"},
+            "worker": {"model": "model", "variant": "high"},
+        },
+        "harness": "opencode",
         "permissions": {"implement": True, "merge": False},
         "repositories": ["org/demo"],
         "source_bindings": {"issue": "#1", "spec": "#4"},
@@ -802,7 +807,72 @@ def test_concurrent_read_returns_consistent_ledger(tmp_path, monkeypatch):
     reader.join(2)
     assert not writer.is_alive()
     assert not reader.is_alive()
-    assert results.get(timeout=2) == ("writer", "ok")
-    assert results.get(timeout=2) == ("reader", 2)
+    # note: writer and reader enqueue independently after release; their
+    # arrival order is nondeterministic, so compare as a set, not a sequence.
+    drained = {results.get(timeout=2), results.get(timeout=2)}
+    assert drained == {("writer", "ok"), ("reader", 2)}
     with pytest.raises(Empty):
         results.get_nowait()
+
+
+def test_distinct_role_routes_are_pinned_and_mismatch_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    data = payload()
+    data["routes"] = {
+        "planner": {"model": "gpt-5.6-terra", "variant": "high"},
+        "reviewer": {"model": "gpt-5.6-terra", "variant": "high"},
+        "worker": {"model": "gpt-5.6-luna", "variant": "high"},
+    }
+    activate(data)
+    config = StateStore.from_goal("demo-goal").read_config()
+    assert config["routes"]["worker"]["model"] == "gpt-5.6-luna"
+    assert config["routes"]["planner"]["model"] == "gpt-5.6-terra"
+
+    plan_run = {
+        "phase": "plan",
+        "owner": "planner",
+        "attempt": 1,
+        "work_item_id": "demo-goal",
+        "worker_role": "planner",
+        "model": "gpt-5.6-terra",
+        "variant": "high",
+        "session_id": "s",
+        "process_id": "p",
+        "command": "plan",
+        "worktree": "/worktree",
+        "expected_evidence": "plan",
+        "observed_evidence": "plan",
+        "next_action": "plan",
+    }
+    phase("demo-goal", plan_run, 1)
+
+    # A worker using the planner's route is a route mismatch.
+    with pytest.raises(CoordinatorError) as error:
+        phase(
+            "demo-goal",
+            {
+                **plan_run,
+                "phase": "implement",
+                "attempt": 2,
+                "worker_role": "worker",
+                "model": "gpt-5.6-terra",
+                "variant": "high",
+            },
+            2,
+        )
+    assert error.value.code == "route_mismatch"
+
+
+def test_activation_persists_harness_and_rejects_unsupported(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    config = StateStore.from_goal("demo-goal").read_config()
+    assert config["harness"] == "opencode"
+
+    bad = copy.deepcopy(payload())
+    bad["goal_id"] = "other-goal"
+    bad["harness"] = "claude-code"
+    with pytest.raises(CoordinatorError) as error:
+        activate(bad)
+    assert error.value.code == "invalid_harness"
+    assert not (tmp_path / "dev-log" / "other-goal").exists()

@@ -10,6 +10,7 @@ from .service_common import (
 from .validation import (
     PHASE_RUN_STATUSES,
     QUESTION_STATUSES,
+    WORKER_ROUTES,
     expected_revision,
     identifier,
     json_value,
@@ -84,6 +85,10 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
             raise CoordinatorError(
                 "invalid_phase_run", f"phase {field} must be non-empty"
             )
+    if data["worker_role"] not in WORKER_ROUTES:
+        raise CoordinatorError(
+            "invalid_phase_run", "worker_role has no pinned route"
+        )
     json_value(data["expected_evidence"], "phase.expected_evidence")
     json_value(data["observed_evidence"], "phase.observed_evidence")
     identifier(data["work_item_id"], "phase.work_item_id")
@@ -144,10 +149,8 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
             )
         matching_run = matching_runs[0] if matching_runs else None
         config = _store(goal_id).read_config()
-        if (
-            data["model"] != config["route"]["model"]
-            or data["variant"] != config["route"]["variant"]
-        ):
+        pinned = config["routes"][data["worker_role"]]
+        if data["model"] != pinned["model"] or data["variant"] != pinned["variant"]:
             raise CoordinatorError(
                 "route_mismatch", "phase run does not use the pinned model route"
             )

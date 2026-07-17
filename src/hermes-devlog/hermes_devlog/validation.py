@@ -18,6 +18,8 @@ SECRET_PATTERNS = (
     re.compile(r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+"),
     re.compile(r"(?i)-----begin [a-z0-9 ]*private key-----"),
 )
+SUPPORTED_HARNESSES = ("opencode",)
+WORKER_ROUTES = ("planner", "reviewer", "worker")
 PHASES = {
     "issue",
     "plan",
@@ -164,6 +166,24 @@ def _route(value: object) -> dict:
     return route
 
 
+def _routes(value: object) -> dict:
+    """Validate one pinned model route per supported worker role."""
+    routes = strict_mapping(value, set(WORKER_ROUTES), "routes")
+    if set(routes) != set(WORKER_ROUTES):
+        raise CoordinatorError(
+            "invalid_routes", "routes must pin planner, reviewer, and worker"
+        )
+    return {role: _route(route) for role, route in routes.items()}
+
+
+def _harness(value: object) -> str:
+    if value not in SUPPORTED_HARNESSES:
+        raise CoordinatorError(
+            "invalid_harness", "harness must be one of: opencode"
+        )
+    return value  # type: ignore[return-value]
+
+
 def _policy(value: object) -> dict:
     policy = strict_mapping(value, POLICY_FIELDS, "policy")
     if "capacity" in policy and (
@@ -290,7 +310,8 @@ def activation_payload(payload: object) -> dict:
             "title",
             "template",
             "profile",
-            "route",
+            "routes",
+            "harness",
             "permissions",
             "policy",
             "repositories",
@@ -305,7 +326,8 @@ def activation_payload(payload: object) -> dict:
         raise CoordinatorError("invalid_title", "title must be a non-empty string")
     _template(data.get("template"))
     _profile(data.get("profile"))
-    _route(data.get("route"))
+    _routes(data.get("routes"))
+    _harness(data.get("harness"))
     permissions = data.get("permissions")
     permission_scope(permissions)
     repositories = data.get("repositories")

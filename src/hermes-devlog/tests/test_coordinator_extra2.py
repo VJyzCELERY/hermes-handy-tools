@@ -49,7 +49,12 @@ def payload():
         "title": "Demo goal",
         "template": template(),
         "profile": {"name": "native", "match": "native", "sources": []},
-        "route": {"model": "model", "variant": "high"},
+        "routes": {
+            "planner": {"model": "model", "variant": "high"},
+            "reviewer": {"model": "model", "variant": "high"},
+            "worker": {"model": "model", "variant": "high"},
+        },
+        "harness": "opencode",
         "permissions": {"implement": True, "merge": False},
         "repositories": ["org/demo"],
         "source_bindings": {"issue": "#1", "spec": "#4"},
