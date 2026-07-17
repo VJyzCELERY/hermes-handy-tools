@@ -26,6 +26,7 @@ class StateStore:
         self.state_path = root / "state.json"
         self.config_path = root / "config.json"
         self.activity_path = root / "activity.jsonl"
+        self.pending_path = root / ".pending.json"
         self.lock_path = root / ".lock"
 
     @classmethod
@@ -42,6 +43,7 @@ class StateStore:
 
     def _read_unlocked(self) -> dict:
         """Read state while the caller holds the per-goal lock."""
+        self._recover_pending()
         try:
             state = json.loads(self.state_path.read_text())
         except FileNotFoundError as exc:
@@ -101,9 +103,14 @@ class StateStore:
                 self.activity_path.stat().st_size if self.activity_path.exists() else 0
             )
             try:
+                self._atomic_json(
+                    self.pending_path,
+                    self._activity_record("activate", 1),
+                )
                 self._atomic_json(self.config_path, config)
                 self._atomic_json(self.state_path, state)
                 self._activity("activate", 1)
+                self.pending_path.unlink(missing_ok=True)
             except Exception:
                 for path in (self.config_path, self.state_path):
                     path.unlink(missing_ok=True)
@@ -115,6 +122,7 @@ class StateStore:
                         handle.truncate(activity_size)
                     if activity_size == 0:
                         self.activity_path.unlink(missing_ok=True)
+                self.pending_path.unlink(missing_ok=True)
                 raise
         return state
 
@@ -144,11 +152,19 @@ class StateStore:
             state_bytes = self.state_path.read_bytes()
             activity_bytes = self.activity_path.read_bytes()
             try:
+                self._atomic_json(
+                    self.pending_path,
+                    self._activity_record(
+                        operation, updated["revision"], actor, verified
+                    ),
+                )
                 self._atomic_json(self.state_path, updated)
                 self._activity(operation, updated["revision"], actor, verified)
+                self.pending_path.unlink(missing_ok=True)
             except Exception:
                 self.state_path.write_bytes(state_bytes)
                 self.activity_path.write_bytes(activity_bytes)
+                self.pending_path.unlink(missing_ok=True)
                 raise
         return updated
 
@@ -175,6 +191,18 @@ class StateStore:
         actor: str = "hermes",
         verified: bool = True,
     ) -> None:
+        self._append_activity(
+            self._activity_record(operation, revision, actor, verified)
+        )
+
+    def _activity_record(
+        self,
+        operation: str,
+        revision: int,
+        actor: str = "hermes",
+        verified: bool = True,
+    ) -> dict:
+        """Build one validated activity record for journaling or append."""
         record = {
             "timestamp": datetime.now(UTC).isoformat(),
             "actor": actor,
@@ -192,8 +220,52 @@ class StateStore:
             or not isinstance(verified, bool)
         ):
             raise CoordinatorError("invalid_activity", "activity record is invalid")
+        return record
+
+    def _append_activity(self, record: dict) -> None:
         with self.activity_path.open("a") as handle:
             handle.write(json.dumps(record, allow_nan=False, sort_keys=True) + "\n")
+
+    def _recover_pending(self) -> None:
+        """Finish an interrupted state/activity commit before reading state."""
+        if not self.pending_path.exists():
+            return
+        try:
+            pending = json.loads(self.pending_path.read_text())
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise CoordinatorError(
+                "invalid_state", "pending activity record cannot be read"
+            ) from exc
+        if not isinstance(pending, dict):
+            raise CoordinatorError(
+                "invalid_state", "pending activity record is invalid"
+            )
+        self._validate_activity_record(pending, "pending activity record")
+        try:
+            state = json.loads(self.state_path.read_text())
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise CoordinatorError(
+                "invalid_state", "pending state commit cannot be inspected"
+            ) from exc
+        try:
+            lines = self.activity_path.read_text().splitlines()
+        except FileNotFoundError:
+            lines = []
+        except (OSError, UnicodeDecodeError) as exc:
+            raise CoordinatorError(
+                "invalid_state", "pending activity ledger cannot be inspected"
+            ) from exc
+        revision = state.get("revision") if isinstance(state, dict) else None
+        if revision == pending["revision"] and len(lines) == revision - 1:
+            self._append_activity(pending)
+        elif revision == pending["revision"] - 1 and len(lines) == revision:
+            self.pending_path.unlink()
+            return
+        elif revision != pending["revision"] or len(lines) != revision:
+            raise CoordinatorError(
+                "invalid_state", "pending state commit is inconsistent"
+            )
+        self.pending_path.unlink()
 
     def _validate_activity(self, state_revision: int) -> None:
         """Validate the append-only activity ledger against state revision."""
@@ -219,18 +291,32 @@ class StateStore:
                 raise CoordinatorError(
                     "invalid_state", "activity ledger record is invalid"
                 )
-            if (
-                not isinstance(record["timestamp"], str)
-                or not record["timestamp"]
-                or not isinstance(record["actor"], str)
-                or not record["actor"]
-                or not isinstance(record["operation"], str)
-                or not record["operation"]
-                or not isinstance(record["revision"], int)
-                or isinstance(record["revision"], bool)
-                or record["revision"] != expected
-                or not isinstance(record["verified"], bool)
-            ):
-                raise CoordinatorError(
-                    "invalid_state", "activity ledger record is invalid"
-                )
+            self._validate_activity_record(record, "activity ledger record", expected)
+
+    def _validate_activity_record(
+        self, record: object, label: str, expected_revision: int | None = None
+    ) -> None:
+        if not isinstance(record, dict) or set(record) != {
+            "timestamp",
+            "actor",
+            "operation",
+            "revision",
+            "verified",
+        }:
+            raise CoordinatorError("invalid_state", f"{label} is invalid")
+        if (
+            not isinstance(record["timestamp"], str)
+            or not record["timestamp"]
+            or not isinstance(record["actor"], str)
+            or not record["actor"]
+            or not isinstance(record["operation"], str)
+            or not record["operation"]
+            or not isinstance(record["revision"], int)
+            or isinstance(record["revision"], bool)
+            or not isinstance(record["verified"], bool)
+            or (
+                expected_revision is not None
+                and record["revision"] != expected_revision
+            )
+        ):
+            raise CoordinatorError("invalid_state", f"{label} is invalid")

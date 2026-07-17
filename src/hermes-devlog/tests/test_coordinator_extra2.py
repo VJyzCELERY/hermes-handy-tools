@@ -255,7 +255,20 @@ def test_required_workflow_phases_are_enforced(tmp_path, monkeypatch):
     for revision, phase_name in enumerate(
         ("plan_review", "implement", "implementation_review"), start=2
     ):
-        phase_data = {**phase_data, "phase": phase_name, "attempt": revision}
+        phase_data = {
+            **phase_data,
+            "phase": phase_name,
+            "attempt": revision,
+            **(
+                {
+                    "worker_role": "reviewer",
+                    "session_id": "review-session",
+                    "process_id": "review-process",
+                }
+                if phase_name == "implementation_review"
+                else {}
+            ),
+        }
         phase("demo-goal", phase_data, revision)
     review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 5)
     phase_data = {**phase_data, "phase": "pr_delivery", "attempt": 5}

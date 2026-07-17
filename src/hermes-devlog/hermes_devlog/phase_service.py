@@ -154,6 +154,22 @@ def phase(goal_id: str, data: Mapping, revision: int) -> dict:
             raise CoordinatorError(
                 "invalid_transition", f"cannot move from {current} to {target}"
             )
+        if target == "implementation_review":
+            if data["worker_role"] != "reviewer":
+                raise CoordinatorError(
+                    "invalid_phase_run", "implementation review requires a reviewer"
+                )
+            if any(
+                run.get("work_item_id") == data["work_item_id"]
+                and run.get("session_id") == data["session_id"]
+                and run.get("phase") != "implementation_review"
+                for run in state["phase_runs"]
+                if isinstance(run, Mapping)
+            ):
+                raise CoordinatorError(
+                    "invalid_phase_run",
+                    "implementation review must use an isolated session",
+                )
         if target in {"implement", "remediation"} and not state["goal_graph"][
             "nodes"
         ][data["work_item_id"]]["permissions"].get("implement", False):

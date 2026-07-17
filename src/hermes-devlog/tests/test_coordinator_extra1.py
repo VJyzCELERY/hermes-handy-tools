@@ -192,7 +192,15 @@ def test_completion_requires_implementation_review_after_remediation(
     phase("demo-goal", phase_data, 2)
     phase_data.update({"phase": "implement", "attempt": 3})
     phase("demo-goal", phase_data, 3)
-    phase_data.update({"phase": "implementation_review", "attempt": 4})
+    phase_data.update(
+        {
+            "phase": "implementation_review",
+            "attempt": 4,
+            "worker_role": "reviewer",
+            "session_id": "review-session",
+            "process_id": "review-process",
+        }
+    )
     phase("demo-goal", phase_data, 4)
     review(
         "demo-goal",
@@ -201,7 +209,14 @@ def test_completion_requires_implementation_review_after_remediation(
     )
     phase_data.update({"phase": "remediation", "attempt": 5})
     phase("demo-goal", phase_data, 6)
-    phase_data.update({"phase": "implementation_review", "attempt": 6})
+    phase_data.update(
+        {
+            "phase": "implementation_review",
+            "attempt": 6,
+            "session_id": "review-session-2",
+            "process_id": "review-process-2",
+        }
+    )
     phase("demo-goal", phase_data, 7)
     review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 8)
 
@@ -303,7 +318,21 @@ def test_active_phase_runs_block_completion(tmp_path, monkeypatch):
         ("plan", "plan_review", "implement", "implementation_review"),
         start=3,
     ):
-        phase_data.update({"phase": phase_name, "attempt": revision - 2})
+        phase_data.update(
+            {
+                "phase": phase_name,
+                "attempt": revision - 2,
+                **(
+                    {
+                        "worker_role": "reviewer",
+                        "session_id": "review-session",
+                        "process_id": "review-process",
+                    }
+                    if phase_name == "implementation_review"
+                    else {}
+                ),
+            }
+        )
         phase("demo-goal", phase_data, revision)
     review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 7)
     phase_data.update({"phase": "pr_delivery", "attempt": 5})
@@ -360,7 +389,15 @@ def test_completion_requires_remediation_after_review_findings(tmp_path, monkeyp
     phase("demo-goal", phase_data, 2)
     phase_data.update({"phase": "implement", "attempt": 3})
     phase("demo-goal", phase_data, 3)
-    phase_data.update({"phase": "implementation_review", "attempt": 4})
+    phase_data.update(
+        {
+            "phase": "implementation_review",
+            "attempt": 4,
+            "worker_role": "reviewer",
+            "session_id": "review-session",
+            "process_id": "review-process",
+        }
+    )
     phase("demo-goal", phase_data, 4)
     review(
         "demo-goal",

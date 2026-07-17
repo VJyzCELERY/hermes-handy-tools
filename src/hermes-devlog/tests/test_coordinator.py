@@ -20,6 +20,7 @@ from hermes_devlog.service import (
     question,
     review,
     set_goal_disposition,
+    status,
 )
 from hermes_devlog.store import StateStore
 
@@ -62,6 +63,19 @@ def _read_during_mutation(home, started, done, results):
         results.put(("reader_error", error.code))
     finally:
         done.set()
+
+
+def _crash_after_state_replacement(home):
+    os.environ["HERMES_HOME"] = str(home)
+    original_atomic_json = StateStore._atomic_json
+
+    def write_then_crash(store, path, value):
+        original_atomic_json(store, path, value)
+        if path == store.state_path:
+            os._exit(17)
+
+    StateStore._atomic_json = write_then_crash
+    activate(payload())
 
 
 def template():
@@ -159,6 +173,45 @@ def test_failed_activation_activity_append_rolls_back(tmp_path, monkeypatch):
     assert not (root / "config.json").exists()
     assert not (root / "state.json").exists()
     assert not (root / "activity.jsonl").exists()
+
+
+def test_interrupted_activation_is_recovered(tmp_path, monkeypatch):
+    context = get_context("fork")
+    process = context.Process(target=_crash_after_state_replacement, args=(tmp_path,))
+    process.start()
+    process.join(2)
+    assert process.exitcode == 17
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    assert status("demo-goal")["state"]["revision"] == 1
+
+
+def test_implementation_review_rejects_builder_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    activate(payload())
+    run = {
+        "owner": "worker",
+        "work_item_id": "demo-goal",
+        "worker_role": "worker",
+        "model": "model",
+        "variant": "high",
+        "session_id": "shared",
+        "process_id": "p",
+        "command": "run",
+        "worktree": "/worktree",
+        "expected_evidence": "e",
+        "observed_evidence": "e",
+        "next_action": "next",
+    }
+    for revision, phase_name in enumerate(("plan", "plan_review", "implement"), 1):
+        phase("demo-goal", {**run, "phase": phase_name, "attempt": revision}, revision)
+
+    with pytest.raises(CoordinatorError):
+        phase(
+            "demo-goal",
+            {**run, "phase": "implementation_review", "attempt": 4},
+            4,
+        )
 
 
 def test_stale_revision_is_rejected_without_overwriting(tmp_path, monkeypatch):
@@ -392,7 +445,15 @@ def test_completion_requires_clean_review_children_and_dependencies(
     phase("demo-goal", phase_data, 4)
     phase_data.update({"phase": "implement", "attempt": 3})
     phase("demo-goal", phase_data, 5)
-    phase_data.update({"phase": "implementation_review", "attempt": 4})
+    phase_data.update(
+        {
+            "phase": "implementation_review",
+            "attempt": 4,
+            "worker_role": "reviewer",
+            "session_id": "review-session",
+            "process_id": "review-process",
+        }
+    )
     phase("demo-goal", phase_data, 6)
     review(
         "demo-goal",
@@ -405,7 +466,14 @@ def test_completion_requires_clean_review_children_and_dependencies(
 
     phase_data.update({"phase": "remediation", "attempt": 5})
     phase("demo-goal", phase_data, 8)
-    phase_data.update({"phase": "implementation_review", "attempt": 6})
+    phase_data.update(
+        {
+            "phase": "implementation_review",
+            "attempt": 6,
+            "session_id": "review-session-2",
+            "process_id": "review-process-2",
+        }
+    )
     phase("demo-goal", phase_data, 9)
     review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 10)
     phase_data.update({"phase": "pr_delivery", "attempt": 7})
@@ -473,7 +541,15 @@ def test_merge_permission_gate(tmp_path, monkeypatch):
     phase("demo-goal", phase_data, 2)
     phase_data.update({"phase": "implement", "attempt": 3})
     phase("demo-goal", phase_data, 3)
-    phase_data.update({"phase": "implementation_review", "attempt": 4})
+    phase_data.update(
+        {
+            "phase": "implementation_review",
+            "attempt": 4,
+            "worker_role": "reviewer",
+            "session_id": "review-session",
+            "process_id": "review-process",
+        }
+    )
     phase("demo-goal", phase_data, 4)
     review("demo-goal", {"head": "h", "base": "b", "diff": "d", "findings": []}, 5)
     phase_data.update({"phase": "pr_delivery", "attempt": 5})

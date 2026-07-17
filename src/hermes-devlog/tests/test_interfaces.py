@@ -115,14 +115,22 @@ def test_question_completion_and_discovered_work_gate(tmp_path, monkeypatch):
     phase_data.update({"phase": "implement", "attempt": 3})
     phase_data["next_action"] = "implementation_review"
     phase("demo", phase_data, 3)
-    phase_data.update({"phase": "implementation_review", "attempt": 4})
+    phase_data.update(
+        {
+            "phase": "implementation_review",
+            "attempt": 4,
+            "worker_role": "reviewer",
+            "session_id": "review-session",
+            "process_id": "review-process",
+        }
+    )
     phase_data["next_action"] = "verify"
     phase_data["status"] = "running"
     phase("demo", phase_data, 4)
     question(
         "demo",
         {
-            "session_id": "s",
+            "session_id": "review-session",
             "question": "which file?",
             "answer": "service.py",
             "authority_reference": "state:policy",
